@@ -36,13 +36,14 @@ android {
 dependencies {
     implementation "androidx.core:core-ktx:1.12.0"
     implementation "androidx.activity:activity-compose:1.8.2"
-
-    // Compose UI 核心
+    
+    // Compose 核心库
     implementation "androidx.compose.ui:ui:1.6.0"
     implementation "androidx.compose.foundation:foundation:1.6.0"
-    implementation "androidx.compose.material3:material3:1.2.0" // 新增 Material3 支持
+    implementation "androidx.compose.material3:material3:1.2.0"
+    implementation "androidx.compose.animation:animation:1.6.0"
 
-    // Media3 播放器
+    // 媒体播放器库
     implementation "androidx.media3:media3-exoplayer:1.2.1"
     implementation "androidx.media3:media3-ui:1.2.1"
 }
