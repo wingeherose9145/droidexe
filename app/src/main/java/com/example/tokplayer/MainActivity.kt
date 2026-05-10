@@ -59,7 +59,7 @@ fun MainScreen() {
     val availableFolders = remember { getAvailableVideoFolders(context) }
     val videos = remember(currentPlaylistName) { getVideos(context, currentPlaylistName) }
 
-    // 3秒自动隐藏
+    // 3秒无操作自动隐藏导航栏
     LaunchedEffect(isNavVisible) {
         if (isNavVisible) {
             delay(3000)
@@ -68,16 +68,18 @@ fun MainScreen() {
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        // 视频层
+        // 1. 视频播放层
         TikTokPlayer(videos = videos)
 
-        // 交互层：顶部 1/3 区域点击呼出导航，其余区域点击暂停
+        // 2. 透明交互层：将屏幕分为上下两部分
         Column(modifier = Modifier.fillMaxSize()) {
+            // 点击上方 1/3 区域显隐导航
             Box(modifier = Modifier.fillMaxWidth().weight(1f).clickable { isNavVisible = !isNavVisible })
-            Box(modifier = Modifier.fillMaxWidth().weight(2f)) // 留给视频页面的点击暂停逻辑
+            // 下方 2/3 区域留给视频原有的播放/暂停点击逻辑
+            Box(modifier = Modifier.fillMaxWidth().weight(2f))
         }
 
-        // 导航栏
+        // 3. 导航栏层
         AnimatedVisibility(
             visible = isNavVisible,
             enter = fadeIn() + slideInVertically(),
@@ -87,13 +89,21 @@ fun MainScreen() {
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(Color.Black.copy(alpha = 0.5f))
-                    .padding(top = 40.dp, bottom = 20.dp),
+                    .padding(top = 50.dp, bottom = 20.dp),
                 contentPadding = PaddingValues(horizontal = 20.dp),
                 horizontalArrangement = Arrangement.spacedBy(25.dp)
             ) {
-                item { CategoryTab("全部", currentPlaylistName == null) { currentPlaylistName = null; isNavVisible = false } }
+                item {
+                    CategoryTab("全部", currentPlaylistName == null) { 
+                        currentPlaylistName = null
+                        isNavVisible = false 
+                    }
+                }
                 items(availableFolders) { folder ->
-                    CategoryTab(folder, currentPlaylistName == folder) { currentPlaylistName = folder; isNavVisible = false }
+                    CategoryTab(folder, currentPlaylistName == folder) { 
+                        currentPlaylistName = folder
+                        isNavVisible = false 
+                    }
                 }
             }
         }
@@ -128,6 +138,7 @@ fun VideoPage(uri: Uri, play: Boolean) {
     var pausedByUser by remember { mutableStateOf(false) }
     var isAppInForeground by remember { mutableStateOf(true) }
 
+    // 处理后台播放问题
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_PAUSE) isAppInForeground = false
@@ -170,7 +181,6 @@ fun VideoPage(uri: Uri, play: Boolean) {
     }
 }
 
-// 获取文件夹逻辑
 fun getAvailableVideoFolders(context: android.content.Context): List<String> {
     val folders = mutableSetOf<String>()
     val projection = arrayOf(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
@@ -181,7 +191,6 @@ fun getAvailableVideoFolders(context: android.content.Context): List<String> {
     return folders.toList().sorted()
 }
 
-// 获取视频逻辑
 fun getVideos(context: android.content.Context, albumName: String? = null): List<Uri> {
     val videoList = mutableListOf<Uri>()
     val selection = if (albumName != null) "${MediaStore.Video.Media.BUCKET_DISPLAY_NAME} = ?" else null
