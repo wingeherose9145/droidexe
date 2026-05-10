@@ -57,24 +57,19 @@ class MainActivity : ComponentActivity() {
 fun MainScreen() {
     val context = LocalContext.current
     
-    // 状态管理：当前的播放列表
     var currentPlaylistName by remember { mutableStateOf<String?>(null) } 
     
-    // 动态获取手机里所有包含视频的文件夹名称
     val availableFolders = remember {
         getAvailableVideoFolders(context)
     }
 
-    // 根据当前选中的文件夹获取视频列表
     val videos = remember(currentPlaylistName) {
         getVideos(context, currentPlaylistName)
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        // 底层：视频播放器组件
         TikTokPlayer(videos = videos)
 
-        // 顶层：横向滑动的分类导航栏（去掉底色，换成简洁的纯文本）
         LazyRow(
             modifier = Modifier
                 .fillMaxWidth()
@@ -82,7 +77,6 @@ fun MainScreen() {
             contentPadding = PaddingValues(horizontal = 20.dp),
             horizontalArrangement = Arrangement.spacedBy(24.dp)
         ) {
-            // "全部" 选项
             item {
                 CategoryTab(
                     title = "全部",
@@ -90,7 +84,6 @@ fun MainScreen() {
                     onClick = { currentPlaylistName = null }
                 )
             }
-            // 动态遍历所有文件夹
             items(availableFolders) { folder ->
                 CategoryTab(
                     title = folder,
@@ -102,14 +95,14 @@ fun MainScreen() {
     }
 }
 
-// 抽取一个简洁的文字 Tab 组件
+// 改善 1：导航字体更小，未选中状态更透明 (alpha = 0.3f)
 @Composable
 fun CategoryTab(title: String, isSelected: Boolean, onClick: () -> Unit) {
     Text(
         text = title,
-        color = if (isSelected) Color.White else Color.White.copy(alpha = 0.6f),
+        color = if (isSelected) Color.White else Color.White.copy(alpha = 0.3f),
         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-        fontSize = if (isSelected) 18.sp else 16.sp,
+        fontSize = if (isSelected) 16.sp else 14.sp, 
         modifier = Modifier.clickable { onClick() }
     )
 }
@@ -119,7 +112,7 @@ fun CategoryTab(title: String, isSelected: Boolean, onClick: () -> Unit) {
 fun TikTokPlayer(videos: List<Uri>) {
     if (videos.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("没有找到视频", color = Color.White)
+            Text("没有找到视频", color = Color.White.copy(alpha = 0.5f))
         }
         return
     }
@@ -185,39 +178,35 @@ fun VideoPage(uri: Uri, play: Boolean) {
         }
     }
 
-    // 将视频和播放/暂停图标放在一个 Box 里
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .clickable { pausedByUser = !pausedByUser }, // 点击整个屏幕进行暂停/播放
+            .clickable { pausedByUser = !pausedByUser }, 
         contentAlignment = Alignment.Center
     ) {
         AndroidView(
             factory = {
                 PlayerView(it).apply {
                     player = exoPlayer
-                    useController = false // 彻底禁用自带控制器
-                    setBackgroundColor(android.graphics.Color.BLACK) // 防止加载时闪烁其他颜色
+                    useController = false 
+                    setBackgroundColor(android.graphics.Color.BLACK) 
                 }
             },
             modifier = Modifier.fillMaxSize()
         )
 
-        // 核心修改：只有在用户手动暂停时，才在屏幕中央显示一个半透明的播放图标
+        // 改善 2：暂停图标透明度降至 0.2f，更加隐蔽
         if (pausedByUser) {
             Icon(
                 imageVector = Icons.Filled.PlayArrow,
                 contentDescription = "Play",
                 modifier = Modifier.size(72.dp),
-                tint = Color.White.copy(alpha = 0.5f) // 半透明白色
+                tint = Color.White.copy(alpha = 0.2f) 
             )
         }
     }
 }
 
-/**
- * 动态扫描系统相册，提取所有包含视频的文件夹（Bucket）名称
- */
 fun getAvailableVideoFolders(context: android.content.Context): List<String> {
     val folders = mutableSetOf<String>()
     val collection = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
@@ -238,13 +227,9 @@ fun getAvailableVideoFolders(context: android.content.Context): List<String> {
             }
         }
     }
-    // 转换为 List 并按字母排序
     return folders.toList().sorted()
 }
 
-/**
- * 获取视频列表
- */
 fun getVideos(context: android.content.Context, albumName: String? = null): List<Uri> {
     val videoList = mutableListOf<Uri>()
     val collection = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
