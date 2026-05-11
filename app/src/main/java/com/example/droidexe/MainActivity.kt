@@ -86,6 +86,7 @@ fun MainScreen() {
         }
     }
 
+    // ✅ 核心修改 1：设置 Pager 状态，禁止预加载干扰，确保翻页逻辑纯净
     val pagerState = rememberPagerState(pageCount = { videoFiles.size })
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
@@ -97,14 +98,22 @@ fun MainScreen() {
                 Text("还没有视频\n请点击右下角 + 号导入", color = Color.Gray, textAlign = TextAlign.Center)
             }
         } else {
+            // ✅ 核心修改 2：配置 VerticalPager
             VerticalPager(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),
-                beyondBoundsPageCount = 0 // 减少预加载干扰
+                beyondBoundsPageCount = 0, // 禁止后台预读其他页面，防止旋转冲突
+                pageSpacing = 0.dp,        // 间距清零
+                userScrollEnabled = true   // 允许用户滑动
             ) { page ->
+                // ✅ 核心修改 3：只有当 Pager 完全“定格”在这一页时，才把 play 设为 true
+                // pagerState.currentPage == page 确保了只有目标页在旋转
+                // !pagerState.isScrollInProgress 确保了滑动停止后才旋转，避免重叠卡顿
+                val isCurrentPage = pagerState.currentPage == page && !pagerState.isScrollInProgress
+                
                 VideoPage(
                     file = videoFiles[page], 
-                    play = pagerState.currentPage == page,
+                    play = isCurrentPage,
                     onPauseStateChange = { pausedByUser = it }
                 )
             }
@@ -141,7 +150,6 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
     var progress by remember { mutableFloatStateOf(0f) }
     var isDragging by remember { mutableStateOf(false) }
     
-    // 记录视频的原始尺寸
     var videoWidth by remember { mutableIntStateOf(0) }
     var videoHeight by remember { mutableIntStateOf(0) }
 
@@ -160,14 +168,18 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
         }
     }
 
-    // ✅ 核心修复逻辑：翻页触发方向检测
-    // 当 play 变为 true（即滑动到这一页）且视频尺寸已知时，强制切换 Activity 方向
+    // ✅ 核心修复逻辑：延迟旋转触发
+    // 只有当 play 为 true (Pager停止滑动且当前页对齐) 时才改变屏幕方向
     LaunchedEffect(play, videoWidth, videoHeight) {
         if (play && videoWidth > 0 && videoHeight > 0) {
             if (videoWidth > videoHeight) {
-                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                if (activity?.requestedOrientation != ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE) {
+                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                }
             } else {
-                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                if (activity?.requestedOrientation != ActivityInfo.SCREEN_ORIENTATION_PORTRAIT) {
+                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                }
             }
         }
     }
@@ -186,7 +198,8 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
             exoPlayer.play()
             while (true) {
                 if (!isDragging) {
-                    progress = exoPlayer.currentPosition.toFloat() / exoPlayer.duration.coerceAtLeast(1L).toFloat()
+                    val duration = exoPlayer.duration.coerceAtLeast(1L)
+                    progress = exoPlayer.currentPosition.toFloat() / duration.toFloat()
                 }
                 delay(500)
             }
