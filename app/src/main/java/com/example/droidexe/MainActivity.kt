@@ -50,8 +50,6 @@ import java.io.FileOutputStream
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        // 沉浸式全屏与常亮设置
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
         
@@ -99,11 +97,10 @@ fun MainScreen() {
                 Text("还没有视频\n请点击右下角 + 号导入", color = Color.Gray, textAlign = TextAlign.Center)
             }
         } else {
-            // 始终使用垂直翻页，确保上下滑动切换逻辑的一致性
             VerticalPager(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),
-                beyondBoundsPageCount = 1
+                beyondBoundsPageCount = 0 // 减少预加载干扰
             ) { page ->
                 VideoPage(
                     file = videoFiles[page], 
@@ -113,7 +110,6 @@ fun MainScreen() {
             }
         }
 
-        // 导入按钮：暂停时出现
         if ((videoFiles.isEmpty() || pausedByUser) && !isImporting) {
             FloatingActionButton(
                 onClick = { launcher.launch("video/*") },
@@ -125,7 +121,6 @@ fun MainScreen() {
             }
         }
 
-        // 导入状态指示
         if (isImporting) {
             Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.7f)), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = Color.White)
@@ -145,6 +140,10 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
     var isAppInForeground by remember { mutableStateOf(true) } 
     var progress by remember { mutableFloatStateOf(0f) }
     var isDragging by remember { mutableStateOf(false) }
+    
+    // 记录视频的原始尺寸
+    var videoWidth by remember { mutableIntStateOf(0) }
+    var videoHeight by remember { mutableIntStateOf(0) }
 
     val exoPlayer = remember(file) {
         ExoPlayer.Builder(context).build().apply {
@@ -152,24 +151,27 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
             prepare()
             repeatMode = Player.REPEAT_MODE_ONE
             
-            // ✅ 核心逻辑：监听视频尺寸并强制调整屏幕方向
             addListener(object : Player.Listener {
                 override fun onVideoSizeChanged(videoSize: VideoSize) {
-                    if (play && videoSize.width > 0 && videoSize.height > 0) {
-                        if (videoSize.width > videoSize.height) {
-                            // 检测为横屏视频 -> 强制 Activity 进入横屏模式以获得最大占位
-                            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-                        } else {
-                            // 检测为竖屏视频 -> 强制 Activity 恢复竖屏
-                            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-                        }
-                    }
+                    videoWidth = videoSize.width
+                    videoHeight = videoSize.height
                 }
             })
         }
     }
 
-    // 处理回到桌面自动暂停逻辑
+    // ✅ 核心修复逻辑：翻页触发方向检测
+    // 当 play 变为 true（即滑动到这一页）且视频尺寸已知时，强制切换 Activity 方向
+    LaunchedEffect(play, videoWidth, videoHeight) {
+        if (play && videoWidth > 0 && videoHeight > 0) {
+            if (videoWidth > videoHeight) {
+                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            } else {
+                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            }
+        }
+    }
+
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_PAUSE) isAppInForeground = false 
@@ -194,9 +196,7 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
     }
 
     DisposableEffect(Unit) {
-        onDispose { 
-            exoPlayer.release() 
-        }
+        onDispose { exoPlayer.release() }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -205,7 +205,6 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
                 PlayerView(it).apply { 
                     player = exoPlayer
                     useController = false
-                    // ✅ 关键：FIT 模式配合 Activity 旋转，实现不拉伸的最大占位
                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT 
                 } 
             },
@@ -219,19 +218,11 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
         )
 
         if (paused) {
-            Icon(
-                Icons.Default.PlayArrow, null, 
-                Modifier.size(80.dp).align(Alignment.Center), 
-                tint = Color.White.copy(alpha = 0.3f)
-            )
+            Icon(Icons.Default.PlayArrow, null, Modifier.size(80.dp).align(Alignment.Center), tint = Color.White.copy(alpha = 0.3f))
         }
 
-        // 灵敏进度条：加大热区，无论横竖屏都能精准操作
         Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .height(100.dp)
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(100.dp)
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }, 
             contentAlignment = Alignment.Center
         ) {
@@ -243,25 +234,16 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
                     exoPlayer.seekTo((progress * exoPlayer.duration).toLong())
                 },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 40.dp),
-                colors = SliderDefaults.colors(
-                    thumbColor = Color.White,
-                    activeTrackColor = Color.White,
-                    inactiveTrackColor = Color.White.copy(alpha = 0.24f)
-                )
+                colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White, inactiveTrackColor = Color.White.copy(alpha = 0.24f))
             )
         }
     }
 }
 
-/**
- * 内部存储逻辑
- */
 fun loadInternalVideos(context: Context): List<File> {
     val folder = File(context.filesDir, "videos")
     if (!folder.exists()) folder.mkdirs()
-    return folder.listFiles()?.filter { 
-        it.extension.lowercase() in listOf("mp4", "mkv", "mov", "webm") 
-    }?.sortedByDescending { it.lastModified() } ?: emptyList()
+    return folder.listFiles()?.filter { it.extension.lowercase() in listOf("mp4", "mkv", "mov", "webm") }?.sortedByDescending { it.lastModified() } ?: emptyList()
 }
 
 suspend fun importVideos(context: Context, uris: List<Uri>) = withContext(Dispatchers.IO) {
@@ -273,8 +255,6 @@ suspend fun importVideos(context: Context, uris: List<Uri>) = withContext(Dispat
             context.contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(destFile).use { output -> input.copyTo(output) }
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        } catch (e: Exception) { e.printStackTrace() }
     }
 }
