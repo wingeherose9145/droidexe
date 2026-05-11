@@ -1,226 +1,212 @@
 package com.example.droidexe
 
-import android.Manifest
-import android.content.pm.PackageManager
+import android.content.Context
 import android.net.Uri
 import android.os.Bundle
-import android.provider.MediaStore
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.compose.animation.*
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        // 1. 解决自动熄屏问题
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VIDEO) 
-            != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.READ_MEDIA_VIDEO), 1)
-        }
         setContent { MainScreen() }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MainScreen() {
     val context = LocalContext.current
-    var currentPlaylistName by remember { mutableStateOf<String?>(null) }
-    var isNavVisible by remember { mutableStateOf(false) } 
+    val scope = rememberCoroutineScope()
     
-    val availableFolders = remember { getAvailableVideoFolders(context) }
-    val videos = remember(currentPlaylistName) { getVideos(context, currentPlaylistName) }
+    // 1. 状态管理：视频列表与导入状态
+    var videoFiles by remember { mutableStateOf(loadInternalVideos(context)) }
+    var isImporting by remember { mutableStateOf(false) }
+    var pausedByUser by remember { mutableStateOf(false) }
 
-    val lazyListState = rememberLazyListState()
-    var hideTimerResetTrigger by remember { mutableIntStateOf(0) }
-
-    // 自动隐藏逻辑：操作或滑动时重置3秒计时
-    LaunchedEffect(isNavVisible, hideTimerResetTrigger, lazyListState.isScrollInProgress) {
-        if (isNavVisible) {
-            if (lazyListState.isScrollInProgress) return@LaunchedEffect
-            delay(3000) 
-            if (isNavVisible) isNavVisible = false
+    // 2. 视频选择器
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+        if (uris.isNotEmpty()) {
+            isImporting = true
+            scope.launch {
+                importVideos(context, uris)
+                videoFiles = loadInternalVideos(context) // 刷新列表
+                isImporting = false
+            }
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        TikTokPlayer(videos = videos)
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    val pagerState = rememberPagerState(pageCount = { videoFiles.size })
 
-        Column(modifier = Modifier.fillMaxSize()) {
-            Box(modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null 
-                ) { 
-                    isNavVisible = !isNavVisible 
-                    if (isNavVisible) hideTimerResetTrigger++
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        if (videoFiles.isEmpty()) {
+            // 空状态提示
+            Text("点击 + 号导入视频", color = Color.Gray, modifier = Modifier.align(Alignment.Center))
+        } else {
+            // 3. 自适应播放器：竖屏垂直，横屏水平
+            if (isLandscape) {
+                HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+                    VideoPage(videoFiles[page], pagerState.currentPage == page, 
+                        onPauseStateChange = { pausedByUser = it })
                 }
-            )
-            Box(modifier = Modifier.fillMaxWidth().weight(2f)) 
+            } else {
+                VerticalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+                    VideoPage(videoFiles[page], pagerState.currentPage == page,
+                        onPauseStateChange = { pausedByUser = it })
+                }
+            }
         }
 
-        AnimatedVisibility(
-            visible = isNavVisible,
-            enter = fadeIn() + slideInVertically(),
-            exit = fadeOut() + slideOutVertically()
-        ) {
-            LazyRow(
-                state = lazyListState,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.6f))
-                    .padding(top = 50.dp, bottom = 20.dp),
-                contentPadding = PaddingValues(horizontal = 20.dp),
-                horizontalArrangement = Arrangement.spacedBy(15.dp)
+        // 4. 导入按钮：仅在暂停且未在导入时显示
+        if (pausedByUser && !isImporting) {
+            FloatingActionButton(
+                onClick = { launcher.launch("video/*") },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(30.dp),
+                containerColor = Color.White.copy(alpha = 0.5f),
+                contentColor = Color.Black
             ) {
-                item {
-                    CategoryTab("全部", currentPlaylistName == null) { 
-                        currentPlaylistName = null
-                        isNavVisible = false 
-                    }
-                }
-                items(availableFolders) { folder ->
-                    CategoryTab(folder, currentPlaylistName == folder) { 
-                        currentPlaylistName = folder
-                        isNavVisible = false 
-                    }
-                }
+                Icon(Icons.Default.Add, contentDescription = "Import")
+            }
+        }
+
+        // 5. 导入加载中遮罩
+        if (isImporting) {
+            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.7f)), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = Color.White)
+                Text("正在复制视频到App内部...", color = Color.White, modifier = Modifier.padding(top = 80.dp))
             }
         }
     }
 }
 
 @Composable
-fun CategoryTab(title: String, isSelected: Boolean, onClick: () -> Unit) {
-    Text(
-        text = title,
-        color = if (isSelected) Color.White else Color.White.copy(alpha = 0.35f),
-        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-        fontSize = if (isSelected) 18.sp else 16.sp,
-        modifier = Modifier
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null 
-            ) { onClick() }
-            .padding(horizontal = 12.dp, vertical = 8.dp) 
-    )
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun TikTokPlayer(videos: List<Uri>) {
-    if (videos.isEmpty()) return
-    val pagerState = rememberPagerState(pageCount = { videos.size })
-    VerticalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
-        VideoPage(uri = videos[page], play = pagerState.currentPage == page)
-    }
-}
-
-@Composable
-fun VideoPage(uri: Uri, play: Boolean) {
+fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    var pausedByUser by remember { mutableStateOf(false) }
-    var isAppInForeground by remember { mutableStateOf(true) }
+    var paused by remember { mutableStateOf(false) }
+    
+    // 进度条相关状态
+    var progress by remember { mutableFloatStateOf(0f) }
+    var duration by remember { mutableLongStateOf(1L) }
 
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE) isAppInForeground = false
-            if (event == Lifecycle.Event.ON_RESUME) isAppInForeground = true
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-
-    val exoPlayer = remember(uri) {
+    val exoPlayer = remember(file) {
         ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(uri))
+            setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
             prepare()
-            repeatMode = ExoPlayer.REPEAT_MODE_ONE
+            repeatMode = Player.REPEAT_MODE_ONE
         }
     }
 
-    LaunchedEffect(play, pausedByUser, isAppInForeground) {
-        if (play && !pausedByUser && isAppInForeground) exoPlayer.play() else exoPlayer.pause()
+    // 监听播放状态和进度更新
+    LaunchedEffect(play, paused) {
+        if (play && !paused) {
+            exoPlayer.play()
+            while (true) {
+                progress = exoPlayer.currentPosition.toFloat() / exoPlayer.duration.coerceAtLeast(1)
+                duration = exoPlayer.duration
+                delay(500)
+            }
+        } else {
+            exoPlayer.pause()
+        }
     }
 
-    DisposableEffect(Unit) { onDispose { exoPlayer.release() } }
+    DisposableEffect(Unit) {
+        onDispose { exoPlayer.release() }
+    }
 
-    Box(
-        modifier = Modifier.fillMaxSize().clickable { pausedByUser = !pausedByUser },
-        contentAlignment = Alignment.Center
-    ) {
+    Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
             factory = { PlayerView(it).apply { player = exoPlayer; useController = false } },
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize().clickable { 
+                paused = !paused
+                onPauseStateChange(paused)
+            }
         )
-        if (pausedByUser) {
-            Icon(
-                imageVector = Icons.Filled.PlayArrow,
-                contentDescription = null,
-                modifier = Modifier.size(80.dp),
-                tint = Color.White.copy(alpha = 0.2f)
+
+        // 暂停图标
+        if (paused) {
+            Icon(Icons.Default.PlayArrow, null, Modifier.size(80.dp).align(Alignment.Center), tint = Color.White.copy(alpha = 0.3f))
+        }
+
+        // 6. 沉浸式进度条
+        Slider(
+            value = progress,
+            onValueChange = { 
+                progress = it
+                exoPlayer.seekTo((it * exoPlayer.duration).toLong())
+            },
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 10.dp).height(20.dp),
+            colors = SliderDefaults.colors(
+                thumbColor = Color.White,
+                activeTrackColor = Color.White,
+                inactiveTrackColor = Color.Gray.copy(alpha = 0.5f)
             )
-        }
+        )
     }
 }
 
-fun getAvailableVideoFolders(context: android.content.Context): List<String> {
-    val folders = mutableSetOf<String>()
-    val projection = arrayOf(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
-    context.contentResolver.query(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, projection, null, null, null)?.use { cursor ->
-        val columnIndex = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
-        while (cursor.moveToNext()) { cursor.getString(columnIndex)?.let { folders.add(it) } }
-    }
-    return folders.toList().sorted()
+/**
+ * 核心逻辑：加载 App 内部存储的视频文件
+ */
+fun loadInternalVideos(context: Context): List<File> {
+    val folder = File(context.filesDir, "videos")
+    if (!folder.exists()) folder.mkdirs()
+    return folder.listFiles()?.filter { it.extension in listOf("mp4", "mkv", "mov") }?.sortedByDescending { it.lastModified() } ?: emptyList()
 }
 
-fun getVideos(context: android.content.Context, albumName: String? = null): List<Uri> {
-    val videoList = mutableListOf<Uri>()
-    val selection = if (albumName != null) "${MediaStore.Video.Media.BUCKET_DISPLAY_NAME} = ?" else null
-    val selectionArgs = if (albumName != null) arrayOf(albumName) else null
-    context.contentResolver.query(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, arrayOf(MediaStore.Video.Media._ID), selection, selectionArgs, MediaStore.Video.Media.DATE_ADDED + " DESC")?.use { cursor ->
-        val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
-        while (cursor.moveToNext()) {
-            videoList.add(Uri.withAppendedPath(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, cursor.getLong(idColumn).toString()))
+/**
+ * 核心逻辑：将外部视频复制到沙盒目录
+ */
+suspend fun importVideos(context: Context, uris: List<Uri>) = withContext(Dispatchers.IO) {
+    val folder = File(context.filesDir, "videos")
+    if (!folder.exists()) folder.mkdirs()
+
+    uris.forEach { uri ->
+        val fileName = "vid_${System.currentTimeMillis()}_${uri.lastPathSegment}.mp4"
+        val destFile = File(folder, fileName)
+        try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(destFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
-    return videoList
 }
