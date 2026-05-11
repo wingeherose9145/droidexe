@@ -48,7 +48,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 
-// 安全获取 Activity 的助手函数，防止 Context 包装导致的闪退
+// 顶级工具函数：安全寻找 Activity
 fun Context.findActivity(): Activity? {
     var context = this
     while (context is ContextWrapper) {
@@ -63,7 +63,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // 设置常亮和全屏
+        // 沉浸式与常亮配置
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
         
@@ -89,7 +89,12 @@ fun MainScreen() {
     val scope = rememberCoroutineScope()
     val configuration = LocalConfiguration.current
     
-    var videoFiles by remember { mutableStateOf(loadInternalVideos(context)) }
+    // 初始化加载视频
+    var videoFiles by remember { mutableStateOf(emptyList<File>()) }
+    LaunchedEffect(Unit) {
+        videoFiles = loadInternalVideos(context)
+    }
+
     var isImporting by remember { mutableStateOf(false) }
     var pausedByUser by remember { mutableStateOf(false) }
 
@@ -100,67 +105,56 @@ fun MainScreen() {
                 importVideos(context, uris)
                 videoFiles = loadInternalVideos(context)
                 isImporting = false
-                pausedByUser = false
             }
         }
     }
 
-    val pagerState = rememberPagerState(pageCount = { videoFiles.size })
+    // ✅ 解决“对不齐”的终极方案：使用 orientation 作为 Pager 的 key
+    // 当旋转发生时，Pager 会重新构建并自动吸附到当前比例的正确位置
+    key(configuration.orientation) {
+        val pagerState = rememberPagerState(pageCount = { videoFiles.size })
 
-    // ✅ 修复对齐闪退：增加安全检查
-    LaunchedEffect(configuration.orientation) {
-        if (videoFiles.isNotEmpty() && pagerState.pageCount > 0) {
-            try {
-                delay(200) // 给系统足够的布局转换时间
-                pagerState.scrollToPage(pagerState.currentPage)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-    }
-
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        if (videoFiles.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize().clickable { pausedByUser = !pausedByUser },
-                contentAlignment = Alignment.Center
-            ) {
-                Text("暂无视频，请点击右下角导入", color = Color.Gray, textAlign = TextAlign.Center)
-            }
-        } else {
-            VerticalPager(
-                state = pagerState,
-                modifier = Modifier.fillMaxSize(),
-                beyondBoundsPageCount = 0,
-                pageSpacing = 0.dp
-            ) { page ->
-                // 仅在当前页且停止滑动时激活视频逻辑
-                val isCurrent = pagerState.currentPage == page && !pagerState.isScrollInProgress
-                if (page < videoFiles.size) {
-                    VideoPage(
-                        file = videoFiles[page], 
-                        play = isCurrent,
-                        onPauseStateChange = { pausedByUser = it }
-                    )
+        Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+            if (videoFiles.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("请点击右下角导入视频", color = Color.Gray, textAlign = TextAlign.Center)
+                }
+            } else {
+                VerticalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize(),
+                    beyondBoundsPageCount = 0,
+                    pageSpacing = 0.dp
+                ) { page ->
+                    // 仅当停止滑动且是当前页时，才激活播放和旋转逻辑
+                    val isVisible = pagerState.currentPage == page && !pagerState.isScrollInProgress
+                    if (page < videoFiles.size) {
+                        VideoPage(
+                            file = videoFiles[page], 
+                            isActive = isVisible,
+                            onPauseStateChange = { pausedByUser = it }
+                        )
+                    }
                 }
             }
-        }
 
-        // 按钮淡化处理
-        if ((videoFiles.isEmpty() || pausedByUser) && !isImporting) {
-            FloatingActionButton(
-                onClick = { launcher.launch("video/*") },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 100.dp, end = 30.dp),
-                containerColor = Color.White.copy(alpha = 0.2f),
-                contentColor = Color.White
-            ) {
-                Icon(Icons.Default.Add, null)
+            // 导入按钮：大幅淡化
+            if ((videoFiles.isEmpty() || pausedByUser) && !isImporting) {
+                FloatingActionButton(
+                    onClick = { launcher.launch("video/*") },
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 100.dp, end = 32.dp),
+                    containerColor = Color.White.copy(alpha = 0.15f),
+                    contentColor = Color.White.copy(alpha = 0.5f)
+                ) {
+                    Icon(Icons.Default.Add, null)
+                }
             }
-        }
 
-        if (isImporting) {
-            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = Color.White.copy(alpha = 0.5f))
+            if (isImporting) {
+                CircularProgressIndicator(
+                    modifier = Modifier.align(Alignment.Center),
+                    color = Color.White.copy(alpha = 0.3f)
+                )
             }
         }
     }
@@ -168,19 +162,19 @@ fun MainScreen() {
 
 @UnstableApi
 @Composable
-fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) {
+fun VideoPage(file: File, isActive: Boolean, onPauseStateChange: (Boolean) -> Unit) {
     val context = LocalContext.current
-    val activity = remember { context.findActivity() } // 安全获取 Activity
-    val lifecycleOwner = LocalLifecycleOwner.current 
+    val activity = remember { context.findActivity() }
+    val lifecycleOwner = LocalLifecycleOwner.current
     
-    var paused by remember { mutableStateOf(false) }
-    var isAppInForeground by remember { mutableStateOf(true) } 
+    var isPaused by remember { mutableStateOf(false) }
+    var isResumed by remember { mutableStateOf(true) }
     var progress by remember { mutableFloatStateOf(0f) }
     var isDragging by remember { mutableStateOf(false) }
-    
-    var videoWidth by remember { mutableIntStateOf(0) }
-    var videoHeight by remember { mutableIntStateOf(0) }
+    var vWidth by remember { mutableIntStateOf(0) }
+    var vHeight by remember { mutableIntStateOf(0) }
 
+    // ✅ 修正：将 ExoPlayer 的 remember 与生命周期强绑定
     val exoPlayer = remember(file) {
         ExoPlayer.Builder(context).build().apply {
             setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
@@ -188,17 +182,22 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
             repeatMode = Player.REPEAT_MODE_ONE
             addListener(object : Player.Listener {
                 override fun onVideoSizeChanged(videoSize: VideoSize) {
-                    videoWidth = videoSize.width
-                    videoHeight = videoSize.height
+                    vWidth = videoSize.width
+                    vHeight = videoSize.height
                 }
             })
         }
     }
 
-    // 方向切换
-    LaunchedEffect(play, videoWidth, videoHeight) {
-        if (play && videoWidth > 0 && videoHeight > 0) {
-            val target = if (videoWidth > videoHeight) ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE 
+    // 播放器物理释放：当离开页面或 file 变化时执行
+    DisposableEffect(exoPlayer) {
+        onDispose { exoPlayer.release() }
+    }
+
+    // 屏幕旋转控制
+    LaunchedEffect(isActive, vWidth, vHeight) {
+        if (isActive && vWidth > 0 && vHeight > 0) {
+            val target = if (vWidth > vHeight) ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE 
                          else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             if (activity?.requestedOrientation != target) {
                 activity?.requestedOrientation = target
@@ -206,16 +205,18 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
         }
     }
 
+    // 前后台监听
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            isAppInForeground = (event == Lifecycle.Event.ON_RESUME)
+            isResumed = (event == Lifecycle.Event.ON_RESUME)
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    LaunchedEffect(play, paused, isAppInForeground) { 
-        if (play && !paused && isAppInForeground) { 
+    // 播放与进度更新逻辑
+    LaunchedEffect(isActive, isPaused, isResumed) {
+        if (isActive && !isPaused && isResumed) {
             exoPlayer.play()
             while (true) {
                 if (!isDragging) {
@@ -229,34 +230,33 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
         }
     }
 
-    DisposableEffect(Unit) { onDispose { exoPlayer.release() } }
-
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
             factory = { 
                 PlayerView(it).apply { 
                     player = exoPlayer
                     useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT 
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    setBackgroundColor(0xFF000000.toInt())
                 } 
             },
             modifier = Modifier.fillMaxSize().clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
             ) { 
-                paused = !paused
-                onPauseStateChange(paused)
+                isPaused = !isPaused
+                onPauseStateChange(isPaused)
             }
         )
 
-        if (paused) {
+        if (isPaused) {
             Icon(Icons.Default.PlayArrow, null, Modifier.size(80.dp).align(Alignment.Center), tint = Color.White.copy(alpha = 0.1f))
         }
 
-        // ✅ 极致淡化进度条：高度更小，颜色更浅，减少视觉干扰
+        // ✅ 极致淡化进度条：透明度 0.03f，厚度极小，高精度 seek
         Box(
-            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(50.dp)
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }, 
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(40.dp)
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { },
             contentAlignment = Alignment.Center
         ) {
             Slider(
@@ -266,11 +266,11 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
                     isDragging = false
                     exoPlayer.seekTo((progress * exoPlayer.duration).toLong())
                 },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 40.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 48.dp),
                 colors = SliderDefaults.colors(
                     thumbColor = Color.White.copy(alpha = 0.05f),
-                    activeTrackColor = Color.White.copy(alpha = 0.05f),
-                    inactiveTrackColor = Color.White.copy(alpha = 0.02f)
+                    activeTrackColor = Color.White.copy(alpha = 0.03f),
+                    inactiveTrackColor = Color.White.copy(alpha = 0.01f)
                 )
             )
         }
@@ -280,7 +280,9 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
 fun loadInternalVideos(context: Context): List<File> {
     val folder = File(context.filesDir, "videos")
     if (!folder.exists()) folder.mkdirs()
-    return folder.listFiles()?.filter { it.extension.lowercase() in listOf("mp4", "mkv", "mov", "webm") }?.sortedByDescending { it.lastModified() } ?: emptyList()
+    return folder.listFiles()?.filter { 
+        it.extension.lowercase() in listOf("mp4", "mkv", "mov", "webm") 
+    }?.sortedByDescending { it.lastModified() } ?: emptyList()
 }
 
 suspend fun importVideos(context: Context, uris: List<Uri>) = withContext(Dispatchers.IO) {
