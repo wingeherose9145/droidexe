@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace 'com.example.tokplayer'
+    namespace 'com.example.droidexe'
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.example.tokplayer"
+        applicationId "com.example.droidexe"
         minSdk 24
         targetSdk 34
         versionCode 1
