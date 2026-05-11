@@ -26,12 +26,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner // ✅ 新增：生命周期管理
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle // ✅ 新增
+import androidx.lifecycle.LifecycleEventObserver // ✅ 新增
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.AspectRatioFrameLayout // ✅ 新增
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -40,6 +45,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 
+@UnstableApi 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -49,18 +55,19 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@UnstableApi
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MainScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     
-    // 1. 状态管理
+    // 狀態管理
     var videoFiles by remember { mutableStateOf(loadInternalVideos(context)) }
     var isImporting by remember { mutableStateOf(false) }
     var pausedByUser by remember { mutableStateOf(false) }
 
-    // 2. 视频选择器
+    // 視頻選擇器
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         if (uris.isNotEmpty()) {
             isImporting = true
@@ -68,7 +75,7 @@ fun MainScreen() {
                 importVideos(context, uris)
                 videoFiles = loadInternalVideos(context) // 刷新列表
                 isImporting = false
-                pausedByUser = false // 导入后尝试自动播放
+                pausedByUser = false // 導入後自動播放
             }
         }
     }
@@ -79,7 +86,6 @@ fun MainScreen() {
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         if (videoFiles.isEmpty()) {
-            // ✅ 修复：空状态下的点击逻辑
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -87,19 +93,19 @@ fun MainScreen() {
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
                     ) { 
-                        // 点击空白处也可以强制触发按钮显示逻辑，虽然现在按钮会默认显示
                         pausedByUser = !pausedByUser 
                     },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "还没有视频\n请点击右下角 + 号导入",
+                    text = "還沒有視頻\n請點擊右下角 + 號導入",
                     color = Color.Gray,
                     textAlign = TextAlign.Center
                 )
             }
         } else {
-            // 3. 自适应播放器：竖屏垂直滑动，横屏水平滑动
+            // 自適應播放器：豎屏垂直滑動，橫屏水平滑動
+            // ✅ 這裡現在能正確檢測到系統配置變化了
             if (isLandscape) {
                 HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
                     VideoPage(videoFiles[page], pagerState.currentPage == page, 
@@ -113,14 +119,13 @@ fun MainScreen() {
             }
         }
 
-        // 4. ✅ 修复：导入按钮显示逻辑
-        // 如果列表为空，或者用户点击了暂停，且当前不在导入中，就显示按钮
+        // 導入按钮顯示邏輯
         if ((videoFiles.isEmpty() || pausedByUser) && !isImporting) {
             FloatingActionButton(
                 onClick = { launcher.launch("video/*") },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(bottom = 60.dp, end = 30.dp), // 避开进度条位置
+                    .padding(bottom = 60.dp, end = 30.dp),
                 containerColor = Color.White.copy(alpha = 0.8f),
                 contentColor = Color.Black
             ) {
@@ -128,7 +133,7 @@ fun MainScreen() {
             }
         }
 
-        // 5. 导入中的遮罩
+        // 導入中的遮罩
         if (isImporting) {
             Box(
                 modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.7f)),
@@ -137,19 +142,37 @@ fun MainScreen() {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator(color = Color.White)
                     Spacer(modifier = Modifier.height(20.dp))
-                    Text("正在安全复制到本地仓库...", color = Color.White)
+                    Text("正在安全複製到本地倉庫...", color = Color.White)
                 }
             }
         }
     }
 }
 
+@UnstableApi
 @Composable
 fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current // ✅ 獲取生命周期所有者
     var paused by remember { mutableStateOf(false) }
     
-    // 进度条相关状态
+    // 解決後台播放：監聽 App 生命周期的變化
+    var isAppInForeground by remember { mutableStateOf(true) } // ✅ 新增：App 是否在前台
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE) {
+                isAppInForeground = false // ✅ App 去後台，暫停
+            } else if (event == Lifecycle.Event.ON_RESUME) {
+                isAppInForeground = true // ✅ App 回前台，恢復
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    // 进度条相关狀態
     var progress by remember { mutableFloatStateOf(0f) }
     var isDragging by remember { mutableStateOf(false) }
 
@@ -161,9 +184,9 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
         }
     }
 
-    // 播放/暂停控制及进度更新
-    LaunchedEffect(play, paused) {
-        if (play && !paused) {
+    // 播放/暫停控制及進度更新
+    LaunchedEffect(play, paused, isAppInForeground) { // ✅ 新增了isAppInForeground
+        if (play && !paused && isAppInForeground) { // ✅ 只有同時滿足才能播放
             exoPlayer.play()
             while (true) {
                 if (!isDragging) {
@@ -187,7 +210,10 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
             factory = { 
                 PlayerView(it).apply { 
                     player = exoPlayer
-                    useController = false 
+                    useController = false
+                    // ✅ 新增：解決最大化播放問題。設置縮放模式為填滿但不變形。
+                    // FIT模式下，如果手機物理旋轉到橫屏，ExoPlayer 會自動最大化填滿。
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                 } 
             },
             modifier = Modifier
@@ -201,7 +227,7 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
                 }
         )
 
-        // 暂停时的中间大图标
+        // 暫停時的中間大圖標
         if (paused) {
             Icon(
                 imageVector = Icons.Default.PlayArrow,
@@ -211,7 +237,7 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
             )
         }
 
-        // 6. 沉浸式进度条 (Slider)
+        // 沉浸式進度條 (Slider)
         Slider(
             value = progress,
             onValueChange = { 
@@ -237,7 +263,7 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
 }
 
 /**
- * 加载 App 内部 videos 目录下的文件
+ * 加載 App 內部 videos 目錄下的文件
  */
 fun loadInternalVideos(context: Context): List<File> {
     val folder = File(context.filesDir, "videos")
@@ -248,14 +274,14 @@ fun loadInternalVideos(context: Context): List<File> {
 }
 
 /**
- * 将外部视频复制到 App 专属沙盒
+ * 將外部視頻複製到 App 專屬沙盒
  */
 suspend fun importVideos(context: Context, uris: List<Uri>) = withContext(Dispatchers.IO) {
     val folder = File(context.filesDir, "videos")
     if (!folder.exists()) folder.mkdirs()
 
     uris.forEach { uri ->
-        // 使用时间戳命名防止重复
+        // 使用時間戳命名防止重複
         val fileName = "droid_${System.currentTimeMillis()}.mp4"
         val destFile = File(folder, fileName)
         try {
