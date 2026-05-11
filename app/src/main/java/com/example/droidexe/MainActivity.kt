@@ -3,7 +3,6 @@ package com.example.tokplayer
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
-import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Bundle
 import android.view.WindowManager
@@ -35,7 +34,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
-import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -63,18 +61,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-
         window.setFlags(
             WindowManager.LayoutParams.FLAG_FULLSCREEN,
             WindowManager.LayoutParams.FLAG_FULLSCREEN
         )
-
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-            val lp = window.attributes
-            lp.layoutInDisplayCutoutMode =
-                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-            window.attributes = lp
-        }
 
         setContent {
             Surface(
@@ -99,38 +89,25 @@ fun MainScreen() {
         mutableStateOf(loadInternalVideos(context))
     }
 
-    var isImporting by remember {
-        mutableStateOf(false)
-    }
-
-    var pausedByUser by remember {
-        mutableStateOf(false)
-    }
+    var isImporting by remember { mutableStateOf(false) }
+    var pausedByUser by remember { mutableStateOf(false) }
 
     val pagerState = rememberPagerState(
         pageCount = { videoFiles.size }
     )
 
-    val launcher =
-        rememberLauncherForActivityResult(
-            ActivityResultContracts.GetMultipleContents()
-        ) { uris ->
-
-            if (uris.isNotEmpty()) {
-
-                isImporting = true
-
-                scope.launch {
-
-                    importVideos(context, uris)
-
-                    videoFiles = loadInternalVideos(context)
-
-                    isImporting = false
-                    pausedByUser = false
-                }
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetMultipleContents()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            isImporting = true
+            scope.launch {
+                importVideos(context, uris)
+                videoFiles = loadInternalVideos(context)
+                isImporting = false
             }
         }
+    }
 
     Box(
         modifier = Modifier
@@ -144,9 +121,8 @@ fun MainScreen() {
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-
                 Text(
-                    "请点击右下角导入视频",
+                    "点击右下角 + 导入视频",
                     color = Color.Gray,
                     textAlign = TextAlign.Center
                 )
@@ -157,11 +133,10 @@ fun MainScreen() {
             VerticalPager(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),
-                beyondBoundsPageCount = 0,
-                pageSpacing = 0.dp
+                beyondBoundsPageCount = 1
             ) { page ->
 
-                val isCurrentPage =
+                val isActive =
                     pagerState.currentPage == page &&
                     !pagerState.isScrollInProgress
 
@@ -169,19 +144,7 @@ fun MainScreen() {
 
                     VideoPage(
                         file = videoFiles[page],
-
-                        play = isCurrentPage,
-
-                        onOrientationChanged = {
-
-                            scope.launch {
-
-                                delay(220)
-
-                                pagerState.scrollToPage(page)
-                            }
-                        },
-
+                        play = isActive,
                         onPauseStateChange = {
                             pausedByUser = it
                         }
@@ -193,35 +156,21 @@ fun MainScreen() {
         if ((videoFiles.isEmpty() || pausedByUser) && !isImporting) {
 
             FloatingActionButton(
-                onClick = {
-                    launcher.launch("video/*")
-                },
-
+                onClick = { launcher.launch("video/*") },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(
-                        bottom = 100.dp,
-                        end = 32.dp
-                    ),
-
-                containerColor = Color.White.copy(alpha = 0.12f),
-
-                contentColor = Color.White.copy(alpha = 0.4f)
+                    .padding(bottom = 90.dp, end = 30.dp),
+                containerColor = Color.White.copy(alpha = 0.15f),
+                contentColor = Color.White.copy(alpha = 0.6f)
             ) {
-
-                Icon(
-                    Icons.Default.Add,
-                    contentDescription = null
-                )
+                Icon(Icons.Default.Add, null)
             }
         }
 
         if (isImporting) {
-
             CircularProgressIndicator(
                 modifier = Modifier.align(Alignment.Center),
-
-                color = Color.White.copy(alpha = 0.25f)
+                color = Color.White.copy(alpha = 0.3f)
             )
         }
     }
@@ -232,260 +181,117 @@ fun MainScreen() {
 fun VideoPage(
     file: File,
     play: Boolean,
-    onOrientationChanged: () -> Unit,
     onPauseStateChange: (Boolean) -> Unit
 ) {
 
     val context = LocalContext.current
-    val activity = remember { context.findActivity() }
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    var paused by remember {
-        mutableStateOf(false)
-    }
-
-    var isForeground by remember {
-        mutableStateOf(true)
-    }
-
-    var progress by remember {
-        mutableFloatStateOf(0f)
-    }
-
-    var isDragging by remember {
-        mutableStateOf(false)
-    }
-
-    var videoWidth by remember {
-        mutableIntStateOf(0)
-    }
-
-    var videoHeight by remember {
-        mutableIntStateOf(0)
-    }
+    var paused by remember { mutableStateOf(false) }
+    var isForeground by remember { mutableStateOf(true) }
+    var progress by remember { mutableFloatStateOf(0f) }
+    var isDragging by remember { mutableStateOf(false) }
 
     val exoPlayer = remember(file) {
-
-        ExoPlayer.Builder(context)
-            .build()
-            .apply {
-
-                setMediaItem(
-                    MediaItem.fromUri(
-                        Uri.fromFile(file)
-                    )
-                )
-
-                prepare()
-
-                repeatMode = Player.REPEAT_MODE_ONE
-
-                addListener(
-                    object : Player.Listener {
-
-                        override fun onVideoSizeChanged(videoSize: VideoSize) {
-
-                            videoWidth = videoSize.width
-                            videoHeight = videoSize.height
-                        }
-                    }
-                )
-            }
+        ExoPlayer.Builder(context).build().apply {
+            setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
+            prepare()
+            repeatMode = Player.REPEAT_MODE_ONE
+        }
     }
 
     DisposableEffect(Unit) {
-
-        onDispose {
-
-            exoPlayer.release()
-        }
-    }
-
-    LaunchedEffect(
-        play,
-        videoWidth,
-        videoHeight
-    ) {
-
-        if (
-            play &&
-            videoWidth > 0 &&
-            videoHeight > 0
-        ) {
-
-            val targetOrientation =
-                if (videoWidth > videoHeight) {
-                    ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-                } else {
-                    ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-                }
-
-            if (activity?.requestedOrientation != targetOrientation) {
-
-                activity?.requestedOrientation = targetOrientation
-
-                onOrientationChanged()
-            }
-        }
+        onDispose { exoPlayer.release() }
     }
 
     DisposableEffect(lifecycleOwner) {
-
-        val observer =
-            LifecycleEventObserver { _, event ->
-
-                if (event == Lifecycle.Event.ON_PAUSE) {
-
-                    isForeground = false
-
-                } else if (event == Lifecycle.Event.ON_RESUME) {
-
-                    isForeground = true
-                }
-            }
-
-        lifecycleOwner.lifecycle.addObserver(observer)
-
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
+        val observer = LifecycleEventObserver { _, event ->
+            isForeground = event == Lifecycle.Event.ON_RESUME
         }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    LaunchedEffect(
-        play,
-        paused,
-        isForeground
-    ) {
-
-        if (
-            play &&
-            !paused &&
-            isForeground
-        ) {
-
+    LaunchedEffect(play, paused, isForeground) {
+        if (play && !paused && isForeground) {
             exoPlayer.play()
 
             while (true) {
-
                 if (!isDragging) {
-
-                    val duration =
-                        exoPlayer.duration.coerceAtLeast(1L)
-
-                    progress =
-                        exoPlayer.currentPosition.toFloat() /
-                        duration.toFloat()
+                    val duration = exoPlayer.duration.coerceAtLeast(1L)
+                    progress = exoPlayer.currentPosition.toFloat() / duration
                 }
-
                 delay(120)
             }
-
         } else {
-
             exoPlayer.pause()
         }
     }
 
-    Box(
-        modifier = Modifier.fillMaxSize()
-    ) {
+    Box(modifier = Modifier.fillMaxSize()) {
 
         AndroidView(
-
             factory = {
-
                 PlayerView(it).apply {
-
                     player = exoPlayer
-
                     useController = false
 
-                    resizeMode =
-                        AspectRatioFrameLayout.RESIZE_MODE_FIT
-
-                    setBackgroundColor(0xFF000000.toInt())
+                    // 🔥 TikTok核心：自动裁切铺满
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                 }
             },
-
             modifier = Modifier
                 .fillMaxSize()
                 .clickable(
-                    interactionSource = remember {
-                        MutableInteractionSource()
-                    },
+                    interactionSource = remember { MutableInteractionSource() },
                     indication = null
                 ) {
-
                     paused = !paused
-
                     onPauseStateChange(paused)
                 }
         )
 
         if (paused) {
-
             Icon(
                 Icons.Default.PlayArrow,
                 null,
-
                 Modifier
                     .size(80.dp)
                     .align(Alignment.Center),
-
                 tint = Color.White.copy(alpha = 0.08f)
             )
         }
 
+        // 🔥 极淡进度条（高精度）
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .height(48.dp)
+                .height(50.dp)
                 .clickable(
-                    interactionSource = remember {
-                        MutableInteractionSource()
-                    },
+                    interactionSource = remember { MutableInteractionSource() },
                     indication = null
-                ) { },
-
+                ) {},
             contentAlignment = Alignment.Center
         ) {
 
             Slider(
-
                 value = progress,
-
                 onValueChange = {
-
                     isDragging = true
                     progress = it
                 },
-
                 onValueChangeFinished = {
-
                     isDragging = false
-
-                    val seekPosition =
-                        (progress * exoPlayer.duration)
-                            .toLong()
-
-                    exoPlayer.seekTo(seekPosition)
+                    exoPlayer.seekTo((progress * exoPlayer.duration).toLong())
                 },
-
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 48.dp),
-
+                    .padding(horizontal = 40.dp),
                 colors = SliderDefaults.colors(
-
-                    thumbColor =
-                        Color.White.copy(alpha = 0.04f),
-
-                    activeTrackColor =
-                        Color.White.copy(alpha = 0.03f),
-
-                    inactiveTrackColor =
-                        Color.White.copy(alpha = 0.01f)
+                    thumbColor = Color.White.copy(alpha = 0.05f),
+                    activeTrackColor = Color.White.copy(alpha = 0.03f),
+                    inactiveTrackColor = Color.White.copy(alpha = 0.01f)
                 )
             )
         }
@@ -493,66 +299,29 @@ fun VideoPage(
 }
 
 fun loadInternalVideos(context: Context): List<File> {
-
-    val folder =
-        File(context.filesDir, "videos")
-
-    if (!folder.exists()) {
-        folder.mkdirs()
-    }
+    val folder = File(context.filesDir, "videos")
+    if (!folder.exists()) folder.mkdirs()
 
     return folder.listFiles()
-        ?.filter {
-
-            it.extension.lowercase() in listOf(
-                "mp4",
-                "mkv",
-                "mov",
-                "webm"
-            )
-        }
-        ?.sortedByDescending {
-            it.lastModified()
-        }
+        ?.filter { it.extension.lowercase() in listOf("mp4", "mkv", "mov", "webm") }
+        ?.sortedByDescending { it.lastModified() }
         ?: emptyList()
 }
 
-suspend fun importVideos(
-    context: Context,
-    uris: List<Uri>
-) = withContext(Dispatchers.IO) {
+suspend fun importVideos(context: Context, uris: List<Uri>) =
+    withContext(Dispatchers.IO) {
 
-    val folder =
-        File(context.filesDir, "videos")
+        val folder = File(context.filesDir, "videos")
+        if (!folder.exists()) folder.mkdirs()
 
-    if (!folder.exists()) {
-        folder.mkdirs()
-    }
+        uris.forEach { uri ->
 
-    uris.forEach { uri ->
+            val dest = File(folder, "tok_${System.currentTimeMillis()}.mp4")
 
-        val destFile =
-            File(
-                folder,
-                "tok_${System.currentTimeMillis()}.mp4"
-            )
-
-        try {
-
-            context.contentResolver
-                .openInputStream(uri)
-                ?.use { input ->
-
-                    FileOutputStream(destFile)
-                        .use { output ->
-
-                            input.copyTo(output)
-                        }
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(dest).use { output ->
+                    input.copyTo(output)
                 }
-
-        } catch (e: Exception) {
-
-            e.printStackTrace()
+            }
         }
     }
-}
