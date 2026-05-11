@@ -4,7 +4,7 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
 
     <application
-        android:label="TokPlayer"
+        android:label="droidexe"
         android:icon="@drawable/ic_app_logo"
         android:roundIcon="@drawable/ic_app_logo"
         android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
