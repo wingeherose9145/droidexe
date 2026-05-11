@@ -1,4 +1,4 @@
-package com.example.droidexe
+package com.example.tokplayer
 
 import android.app.Activity
 import android.content.Context
@@ -15,7 +15,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.onSizeChanged
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
@@ -26,6 +25,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.style.TextAlign
@@ -52,9 +52,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // 极致沉浸：全屏、常亮、刘海屏适配
+        // 开启常亮和全屏适配
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
             val lp = window.attributes
             lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
@@ -71,6 +72,7 @@ class MainActivity : ComponentActivity() {
 fun MainScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val configuration = LocalConfiguration.current // 监听屏幕配置
     
     var videoFiles by remember { mutableStateOf(loadInternalVideos(context)) }
     var isImporting by remember { mutableStateOf(false) }
@@ -90,52 +92,55 @@ fun MainScreen() {
 
     val pagerState = rememberPagerState(pageCount = { videoFiles.size })
 
+    // ✅ 解决画面重叠的核心逻辑：
+    // 每当屏幕旋转方向发生变化，强制 Pager 重新对齐当前页
+    LaunchedEffect(configuration.orientation) {
+        if (videoFiles.isNotEmpty()) {
+            delay(150) // 等待布局刷新完毕
+            pagerState.scrollToPage(pagerState.currentPage)
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         if (videoFiles.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize().clickable { pausedByUser = !pausedByUser },
                 contentAlignment = Alignment.Center
             ) {
-                Text("还没有视频\n请点击右下角 + 号导入", color = Color.Gray, textAlign = TextAlign.Center)
+                Text("请点击右下角按钮导入视频", color = Color.DarkGray, textAlign = TextAlign.Center)
             }
         } else {
-            // ✅ 改进点 1：通过 onSizeChanged 监听旋转导致的布局变化，实现强制对齐
             VerticalPager(
                 state = pagerState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .onSizeChanged { 
-                        // 当屏幕旋转导致尺寸变化时，瞬间校准 Pager 偏移量，解决 80/20 重叠问题
-                        scope.launch { pagerState.scrollToPage(pagerState.currentPage) }
-                    },
+                modifier = Modifier.fillMaxSize(),
                 beyondBoundsPageCount = 0,
                 pageSpacing = 0.dp
             ) { page ->
-                // 只有完全停止滑动才标记为播放，防止滑动中途触发旋转冲突
-                val isCurrentPage = pagerState.currentPage == page && !pagerState.isScrollInProgress
+                // 滑动中禁止旋转，停止滑动后才允许 VideoPage 接管方向
+                val canPlay = pagerState.currentPage == page && !pagerState.isScrollInProgress
                 
                 VideoPage(
                     file = videoFiles[page], 
-                    play = isCurrentPage,
+                    play = canPlay,
                     onPauseStateChange = { pausedByUser = it }
                 )
             }
         }
 
-        // 按钮只在暂停或空列表时显示，减少干扰
+        // 按钮显示逻辑
         if ((videoFiles.isEmpty() || pausedByUser) && !isImporting) {
             FloatingActionButton(
                 onClick = { launcher.launch("video/*") },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 100.dp, end = 30.dp),
-                containerColor = Color.White.copy(alpha = 0.5f),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 100.dp, end = 32.dp),
+                containerColor = Color.White.copy(alpha = 0.3f),
                 contentColor = Color.Black
             ) {
-                Icon(Icons.Default.Add, contentDescription = "Import", modifier = Modifier.size(30.dp))
+                Icon(Icons.Default.Add, null)
             }
         }
 
         if (isImporting) {
-            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.7f)), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.6f)), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = Color.White.copy(alpha = 0.5f))
             }
         }
@@ -171,16 +176,13 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
         }
     }
 
-    // 智能旋转：根据视频宽高比自动切换 Activity 方向
+    // 方向自适应逻辑
     LaunchedEffect(play, videoWidth, videoHeight) {
         if (play && videoWidth > 0 && videoHeight > 0) {
-            val targetOrientation = if (videoWidth > videoHeight) {
-                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-            } else {
-                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            }
-            if (activity?.requestedOrientation != targetOrientation) {
-                activity?.requestedOrientation = targetOrientation
+            val target = if (videoWidth > videoHeight) ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE 
+                         else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            if (activity?.requestedOrientation != target) {
+                activity?.requestedOrientation = target
             }
         }
     }
@@ -199,8 +201,8 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
             exoPlayer.play()
             while (true) {
                 if (!isDragging) {
-                    val duration = exoPlayer.duration.coerceAtLeast(1L)
-                    progress = exoPlayer.currentPosition.toFloat() / duration.toFloat()
+                    val dur = exoPlayer.duration.coerceAtLeast(1L)
+                    progress = exoPlayer.currentPosition.toFloat() / dur.toFloat()
                 }
                 delay(500)
             }
@@ -230,32 +232,27 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
         )
 
         if (paused) {
-            Icon(Icons.Default.PlayArrow, null, Modifier.size(80.dp).align(Alignment.Center), tint = Color.White.copy(alpha = 0.2f))
+            Icon(Icons.Default.PlayArrow, null, Modifier.size(64.dp).align(Alignment.Center), tint = Color.White.copy(alpha = 0.2f))
         }
 
-        // ✅ 改进点 2 & 3：高精度且极其淡化的莫兰迪色进度条
+        // ✅ 优化后的进度条：极其低调、高精度
         Box(
-            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(80.dp)
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(60.dp)
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }, 
             contentAlignment = Alignment.Center
         ) {
             Slider(
                 value = progress,
-                onValueChange = { 
-                    isDragging = true
-                    progress = it 
-                    // 实时同步精度预览
-                },
+                onValueChange = { isDragging = true; progress = it },
                 onValueChangeFinished = {
                     isDragging = false
                     exoPlayer.seekTo((progress * exoPlayer.duration).toLong())
                 },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 40.dp),
                 colors = SliderDefaults.colors(
-                    // 采用极其轻微的莫兰迪粉，透明度仅 10%-15%，保证不干扰视线
-                    thumbColor = Color(0xFFD4A5A5).copy(alpha = 0.15f),
-                    activeTrackColor = Color(0xFFD4A5A5).copy(alpha = 0.15f),
-                    inactiveTrackColor = Color.White.copy(alpha = 0.05f)
+                    thumbColor = Color.White.copy(alpha = 0.1f),      // 几乎隐形的滑块
+                    activeTrackColor = Color.White.copy(alpha = 0.08f),// 极其暗淡的已播轨道
+                    inactiveTrackColor = Color.White.copy(alpha = 0.03f)// 几乎看不见的未播轨道
                 )
             )
         }
@@ -272,7 +269,7 @@ suspend fun importVideos(context: Context, uris: List<Uri>) = withContext(Dispat
     val folder = File(context.filesDir, "videos")
     if (!folder.exists()) folder.mkdirs()
     uris.forEach { uri ->
-        val destFile = File(folder, "droid_${System.currentTimeMillis()}.mp4")
+        val destFile = File(folder, "tok_${System.currentTimeMillis()}.mp4")
         try {
             context.contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(destFile).use { output -> input.copyTo(output) }
