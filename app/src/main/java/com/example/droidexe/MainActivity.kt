@@ -228,7 +228,7 @@ fun VideoPage(
 
             exoPlayer.play()
 
-            while (isActive && exoPlayer.isPlaying) {
+            while (exoPlayer.isPlaying) {
 
                 if (!isDragging) {
 
