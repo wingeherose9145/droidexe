@@ -26,17 +26,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner // ✅ 新增：生命周期管理
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.lifecycle.Lifecycle // ✅ 新增
-import androidx.lifecycle.LifecycleEventObserver // ✅ 新增
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.AspectRatioFrameLayout // ✅ 新增
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -49,8 +49,19 @@ import java.io.FileOutputStream
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 保持屏幕常亮
+        
+        // ✅ 核心修改 1：开启硬件常亮和全屏沉浸模式（隐藏状态栏和导航栏，解决横屏黑边）
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        window.setFlags(
+            WindowManager.LayoutParams.FLAG_FULLSCREEN,
+            WindowManager.LayoutParams.FLAG_FULLSCREEN
+        )
+        // 适配异形屏（刘海屏/挖孔屏），让画面真正拓展到屏幕边缘
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            window.attributes.layoutInDisplayCutoutMode = 
+                WindowManager.LayoutParams.LAYOUT_INDISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+
         setContent { MainScreen() }
     }
 }
@@ -62,12 +73,12 @@ fun MainScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     
-    // 狀態管理
+    // 状态管理
     var videoFiles by remember { mutableStateOf(loadInternalVideos(context)) }
     var isImporting by remember { mutableStateOf(false) }
     var pausedByUser by remember { mutableStateOf(false) }
 
-    // 視頻選擇器
+    // 视频选择器
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         if (uris.isNotEmpty()) {
             isImporting = true
@@ -75,7 +86,7 @@ fun MainScreen() {
                 importVideos(context, uris)
                 videoFiles = loadInternalVideos(context) // 刷新列表
                 isImporting = false
-                pausedByUser = false // 導入後自動播放
+                pausedByUser = false // 导入后自动播放
             }
         }
     }
@@ -98,14 +109,13 @@ fun MainScreen() {
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "還沒有視頻\n請點擊右下角 + 號導入",
+                    text = "还没有视频\n请点击右下角 + 号导入",
                     color = Color.Gray,
                     textAlign = TextAlign.Center
                 )
             }
         } else {
-            // 自適應播放器：豎屏垂直滑動，橫屏水平滑動
-            // ✅ 這裡現在能正確檢測到系統配置變化了
+            // 自适应播放器：竖屏垂直滑动，横屏水平滑动
             if (isLandscape) {
                 HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
                     VideoPage(videoFiles[page], pagerState.currentPage == page, 
@@ -119,7 +129,7 @@ fun MainScreen() {
             }
         }
 
-        // 導入按钮顯示邏輯
+        // 导入按钮显示逻辑（位置微调，避开沉浸式区域）
         if ((videoFiles.isEmpty() || pausedByUser) && !isImporting) {
             FloatingActionButton(
                 onClick = { launcher.launch("video/*") },
@@ -133,7 +143,7 @@ fun MainScreen() {
             }
         }
 
-        // 導入中的遮罩
+        // 导入中的遮罩
         if (isImporting) {
             Box(
                 modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.7f)),
@@ -142,7 +152,7 @@ fun MainScreen() {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator(color = Color.White)
                     Spacer(modifier = Modifier.height(20.dp))
-                    Text("正在安全複製到本地倉庫...", color = Color.White)
+                    Text("正在安全复制到本地仓库...", color = Color.White)
                 }
             }
         }
@@ -153,17 +163,17 @@ fun MainScreen() {
 @Composable
 fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current // ✅ 獲取生命周期所有者
+    val lifecycleOwner = LocalLifecycleOwner.current 
     var paused by remember { mutableStateOf(false) }
     
-    // 解決後台播放：監聽 App 生命周期的變化
-    var isAppInForeground by remember { mutableStateOf(true) } // ✅ 新增：App 是否在前台
+    // 解决后台播放：监听 App 生命周期的变化
+    var isAppInForeground by remember { mutableStateOf(true) } 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_PAUSE) {
-                isAppInForeground = false // ✅ App 去後台，暫停
+                isAppInForeground = false 
             } else if (event == Lifecycle.Event.ON_RESUME) {
-                isAppInForeground = true // ✅ App 回前台，恢復
+                isAppInForeground = true 
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -172,9 +182,11 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
         }
     }
 
-    // 进度条相关狀態
+    // ✅ 核心修改 2：进度条相关状态优化
     var progress by remember { mutableFloatStateOf(0f) }
     var isDragging by remember { mutableStateOf(false) }
+    // 控制进度条层的点击热区拦截
+    val interactionSource = remember { MutableInteractionSource() }
 
     val exoPlayer = remember(file) {
         ExoPlayer.Builder(context).build().apply {
@@ -184,9 +196,9 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
         }
     }
 
-    // 播放/暫停控制及進度更新
-    LaunchedEffect(play, paused, isAppInForeground) { // ✅ 新增了isAppInForeground
-        if (play && !paused && isAppInForeground) { // ✅ 只有同時滿足才能播放
+    // 播放/暂停控制及进度更新
+    LaunchedEffect(play, paused, isAppInForeground) { 
+        if (play && !paused && isAppInForeground) { 
             exoPlayer.play()
             while (true) {
                 if (!isDragging) {
@@ -206,18 +218,19 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
+        // 视频画面层
         AndroidView(
             factory = { 
                 PlayerView(it).apply { 
                     player = exoPlayer
                     useController = false
-                    // ✅ 新增：解決最大化播放問題。設置縮放模式為填滿但不變形。
-                    // FIT模式下，如果手機物理旋轉到橫屏，ExoPlayer 會自動最大化填滿。
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    // ✅ 核心修改 3：配合全屏模式，使用 RESIZE_MODE_FILL 彻底最大化（不裁剪）
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
                 } 
             },
             modifier = Modifier
                 .fillMaxSize()
+                // 手指点击视频画面，触发暂停
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
@@ -227,43 +240,57 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
                 }
         )
 
-        // 暫停時的中間大圖標
+        // 暂停时的中间大图标
         if (paused) {
             Icon(
-                imageVector = Icons.Default.PlayArrow,
+                imageVector = Icons.Filled.PlayArrow,
                 contentDescription = null,
                 modifier = Modifier.size(80.dp).align(Alignment.Center),
                 tint = Color.White.copy(alpha = 0.3f)
             )
         }
 
-        // 沉浸式進度條 (Slider)
-        Slider(
-            value = progress,
-            onValueChange = { 
-                isDragging = true
-                progress = it
-            },
-            onValueChangeFinished = {
-                isDragging = false
-                val seekPos = (progress * exoPlayer.duration).toLong()
-                exoPlayer.seekTo(seekPos)
-            },
+        // ✅ 核心修改 4：超灵敏沉浸式进度条 (Slider 区域加大)
+        // 这个 Box 专门作为一个透明的拦截层，用于容纳 Slider
+        Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 20.dp),
-            colors = SliderDefaults.colors(
-                thumbColor = Color.White,
-                activeTrackColor = Color.White,
-                inactiveTrackColor = Color.White.copy(alpha = 0.3f)
+                .height(80.dp) // 给一个很大的高度，作为点击热区
+                // ✅ 极其关键：拦截这个区域内所有的点击手势，确保不会透过点击由于 Slider 细导致的视频暂停层
+                .clickable(
+                    interactionSource = interactionSource,
+                    indication = null // 去掉点击时的灰色阴影
+                ) {}, // 虽然不做任何事，但它拦截了手势
+            contentAlignment = Alignment.Center
+        ) {
+            Slider(
+                value = progress,
+                onValueChange = { 
+                    isDragging = true
+                    progress = it
+                },
+                onValueChangeFinished = {
+                    isDragging = false
+                    val seekPos = (progress * exoPlayer.duration).toLong()
+                    exoPlayer.seekTo(seekPos)
+                },
+                // 将 Slider 浮到 Box 的上面，确保它接收滑动手势
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 25.dp),
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = Color.White,
+                    inactiveTrackColor = Color.White.copy(alpha = 0.25f)
+                )
             )
-        )
+        }
     }
 }
 
 /**
- * 加載 App 內部 videos 目錄下的文件
+ * 加载 App 内部 videos 目录下的文件
  */
 fun loadInternalVideos(context: Context): List<File> {
     val folder = File(context.filesDir, "videos")
@@ -274,14 +301,14 @@ fun loadInternalVideos(context: Context): List<File> {
 }
 
 /**
- * 將外部視頻複製到 App 專屬沙盒
+ * 将外部视频复制到 App 专属沙盒
  */
 suspend fun importVideos(context: Context, uris: List<Uri>) = withContext(Dispatchers.IO) {
     val folder = File(context.filesDir, "videos")
     if (!folder.exists()) folder.mkdirs()
 
     uris.forEach { uri ->
-        // 使用時間戳命名防止重複
+        // 使用时间戳命名防止重复
         val fileName = "droid_${System.currentTimeMillis()}.mp4"
         val destFile = File(folder, fileName)
         try {
