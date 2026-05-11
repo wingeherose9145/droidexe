@@ -1,8 +1,7 @@
-package com.example.tokplayer
+package com.example.droidexe
 
 import android.app.Activity
 import android.content.Context
-import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Bundle
@@ -28,12 +27,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -45,21 +46,21 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 
-@UnstableApi
+@UnstableApi 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 极致沉浸式
+        
+        // 设置常亮、全屏以及刘海屏适配
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
-        
-        setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
-                    MainScreen()
-                }
-            }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            val lp = window.attributes
+            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            window.attributes = lp
         }
+
+        setContent { MainScreen() }
     }
 }
 
@@ -70,13 +71,9 @@ fun MainScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     
-    var videoFiles by remember { mutableStateOf<List<File>>(emptyList()) }
+    var videoFiles by remember { mutableStateOf(loadInternalVideos(context)) }
     var isImporting by remember { mutableStateOf(false) }
     var pausedByUser by remember { mutableStateOf(false) }
-
-    LaunchedEffect(Unit) {
-        videoFiles = loadInternalVideos(context)
-    }
 
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         if (uris.isNotEmpty()) {
@@ -85,36 +82,61 @@ fun MainScreen() {
                 importVideos(context, uris)
                 videoFiles = loadInternalVideos(context)
                 isImporting = false
+                pausedByUser = false
             }
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        if (videoFiles.isNotEmpty()) {
-            val pagerState = rememberPagerState(pageCount = { videoFiles.size })
+    val pagerState = rememberPagerState(pageCount = { videoFiles.size })
+
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        if (videoFiles.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize().clickable { pausedByUser = !pausedByUser },
+                contentAlignment = Alignment.Center
+            ) {
+                Text("还没有视频\n请点击右下角 + 号导入", color = Color.Gray, textAlign = TextAlign.Center)
+            }
+        } else {
             VerticalPager(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),
-                beyondBoundsPageCount = 0
+                beyondBoundsPageCount = 0, // 核心：禁止预加载，防止旋转指令冲突
+                pageSpacing = 0.dp
             ) { page ->
-                val isActive = pagerState.currentPage == page && !pagerState.isScrollInProgress
+                // 只有当滑动停止且在当前页时，才标记为可播放，防止滑动中途触发旋转
+                val isCurrentPage = pagerState.currentPage == page && !pagerState.isScrollInProgress
+                
                 VideoPage(
-                    file = videoFiles[page],
-                    isActive = isActive,
+                    file = videoFiles[page], 
+                    play = isCurrentPage,
+                    onOrientationChanged = {
+                        // ✅ 关键修复：当 VideoPage 触发 Activity 旋转后，父容器强行对齐
+                        scope.launch {
+                            // 给系统 200ms 的布局刷新时间，然后强制吸附到当前页
+                            delay(200)
+                            pagerState.scrollToPage(page)
+                        }
+                    },
                     onPauseStateChange = { pausedByUser = it }
                 )
             }
-        } else {
-            Text("点击右下角导入视频", color = Color.Gray, modifier = Modifier.align(Alignment.Center))
         }
 
         if ((videoFiles.isEmpty() || pausedByUser) && !isImporting) {
-            SmallFloatingActionButton(
+            FloatingActionButton(
                 onClick = { launcher.launch("video/*") },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(32.dp),
-                containerColor = Color.White.copy(alpha = 0.1f)
+                modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 80.dp, end = 30.dp),
+                containerColor = Color.White.copy(alpha = 0.8f),
+                contentColor = Color.Black
             ) {
-                Icon(Icons.Default.Add, null, tint = Color.White.copy(alpha = 0.5f))
+                Icon(Icons.Default.Add, contentDescription = "Import", modifier = Modifier.size(30.dp))
+            }
+        }
+
+        if (isImporting) {
+            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.7f)), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = Color.White)
             }
         }
     }
@@ -122,63 +144,71 @@ fun MainScreen() {
 
 @UnstableApi
 @Composable
-fun VideoPage(file: File, isActive: Boolean, onPauseStateChange: (Boolean) -> Unit) {
+fun VideoPage(
+    file: File, 
+    play: Boolean, 
+    onOrientationChanged: () -> Unit,
+    onPauseStateChange: (Boolean) -> Unit
+) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
+    val activity = context as? Activity
+    val lifecycleOwner = LocalLifecycleOwner.current 
     
-    var isPaused by remember { mutableStateOf(false) }
-    var isResumed by remember { mutableStateOf(true) }
+    var paused by remember { mutableStateOf(false) }
+    var isAppInForeground by remember { mutableStateOf(true) } 
     var progress by remember { mutableFloatStateOf(0f) }
     var isDragging by remember { mutableStateOf(false) }
+    
+    var videoWidth by remember { mutableIntStateOf(0) }
+    var videoHeight by remember { mutableIntStateOf(0) }
 
     val exoPlayer = remember(file) {
         ExoPlayer.Builder(context).build().apply {
+            setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
+            prepare()
             repeatMode = Player.REPEAT_MODE_ONE
-        }
-    }
-
-    DisposableEffect(file) {
-        onDispose { exoPlayer.release() }
-    }
-
-    // 处理旋转与准备
-    LaunchedEffect(isActive) {
-        if (isActive) {
-            exoPlayer.setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
-            exoPlayer.prepare()
-            
-            exoPlayer.addListener(object : Player.Listener {
-                override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
-                    val activity = context.let {
-                        var ctx = it
-                        while (ctx is ContextWrapper) {
-                            if (ctx is Activity) break
-                            ctx = ctx.baseContext
-                        }
-                        ctx as? Activity
-                    }
-                    val orientation = if (videoSize.width > videoSize.height) 
-                        ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-                    activity?.requestedOrientation = orientation
+            addListener(object : Player.Listener {
+                override fun onVideoSizeChanged(videoSize: VideoSize) {
+                    videoWidth = videoSize.width
+                    videoHeight = videoSize.height
                 }
             })
         }
     }
 
+    // 监听播放状态并动态改变屏幕方向
+    LaunchedEffect(play, videoWidth, videoHeight) {
+        if (play && videoWidth > 0 && videoHeight > 0) {
+            val targetOrientation = if (videoWidth > videoHeight) {
+                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            } else {
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            }
+
+            if (activity?.requestedOrientation != targetOrientation) {
+                activity?.requestedOrientation = targetOrientation
+                // 通知父容器旋转已触发，需要对齐
+                onOrientationChanged()
+            }
+        }
+    }
+
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            isResumed = (event == Lifecycle.Event.ON_RESUME)
+            if (event == Lifecycle.Event.ON_PAUSE) isAppInForeground = false 
+            else if (event == Lifecycle.Event.ON_RESUME) isAppInForeground = true 
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    LaunchedEffect(isActive, isPaused, isResumed) {
-        if (isActive && !isPaused && isResumed) {
+    LaunchedEffect(play, paused, isAppInForeground) { 
+        if (play && !paused && isAppInForeground) { 
             exoPlayer.play()
             while (true) {
-                if (!isDragging && exoPlayer.duration > 0) {
-                    progress = exoPlayer.currentPosition.toFloat() / exoPlayer.duration.toFloat()
+                if (!isDragging) {
+                    val duration = exoPlayer.duration.coerceAtLeast(1L)
+                    progress = exoPlayer.currentPosition.toFloat() / duration.toFloat()
                 }
                 delay(500)
             }
@@ -187,50 +217,49 @@ fun VideoPage(file: File, isActive: Boolean, onPauseStateChange: (Boolean) -> Un
         }
     }
 
+    DisposableEffect(Unit) {
+        onDispose { exoPlayer.release() }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
-            factory = { ctx ->
-                PlayerView(ctx).apply {
+            factory = { 
+                PlayerView(it).apply { 
                     player = exoPlayer
                     useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    setBackgroundColor(0)
-                }
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT 
+                } 
             },
             modifier = Modifier.fillMaxSize().clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
-            ) {
-                isPaused = !isPaused
-                onPauseStateChange(isPaused)
+            ) { 
+                paused = !paused
+                onPauseStateChange(paused)
             }
         )
 
-        if (isPaused) {
-            Icon(Icons.Default.PlayArrow, null, Modifier.size(60.dp).align(Alignment.Center), tint = Color.White.copy(alpha = 0.2f))
+        if (paused) {
+            Icon(Icons.Default.PlayArrow, null, Modifier.size(80.dp).align(Alignment.Center), tint = Color.White.copy(alpha = 0.3f))
         }
 
-        // ✅ 修正后的 Slider：使用兼容性最好的颜色定义，且视觉上极淡
-        Slider(
-            value = progress,
-            onValueChange = { isDragging = true; progress = it },
-            onValueChangeFinished = {
-                isDragging = false
-                exoPlayer.seekTo((progress * exoPlayer.duration).toLong())
-            },
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .padding(horizontal = 40.dp, vertical = 4.dp),
-            colors = SliderDefaults.colors(
-                thumbColor = Color.White.copy(alpha = 0.05f),
-                activeTrackColor = Color.White.copy(alpha = 0.05f),
-                inactiveTrackColor = Color.White.copy(alpha = 0.01f),
-                disabledThumbColor = Color.Transparent,
-                disabledActiveTrackColor = Color.Transparent,
-                disabledInactiveTrackColor = Color.Transparent
+        // 进度条控制
+        Box(
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(100.dp)
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }, 
+            contentAlignment = Alignment.Center
+        ) {
+            Slider(
+                value = progress,
+                onValueChange = { isDragging = true; progress = it },
+                onValueChangeFinished = {
+                    isDragging = false
+                    exoPlayer.seekTo((progress * exoPlayer.duration).toLong())
+                },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 40.dp),
+                colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White, inactiveTrackColor = Color.White.copy(alpha = 0.24f))
             )
-        )
+        }
     }
 }
 
@@ -244,7 +273,7 @@ suspend fun importVideos(context: Context, uris: List<Uri>) = withContext(Dispat
     val folder = File(context.filesDir, "videos")
     if (!folder.exists()) folder.mkdirs()
     uris.forEach { uri ->
-        val destFile = File(folder, "tok_${System.currentTimeMillis()}.mp4")
+        val destFile = File(folder, "droid_${System.currentTimeMillis()}.mp4")
         try {
             context.contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(destFile).use { output -> input.copyTo(output) }
