@@ -1,4 +1,4 @@
-package com.example.tokplayer
+package com.example.droidexe
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -46,7 +46,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // 1. ✅ 解决自动熄屏问题：只要 App 在前台，屏幕常亮
+        // 1. 解决自动熄屏问题
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VIDEO) 
@@ -69,7 +69,7 @@ fun MainScreen() {
     val lazyListState = rememberLazyListState()
     var hideTimerResetTrigger by remember { mutableIntStateOf(0) }
 
-    // 自动隐藏逻辑
+    // 自动隐藏逻辑：操作或滑动时重置3秒计时
     LaunchedEffect(isNavVisible, hideTimerResetTrigger, lazyListState.isScrollInProgress) {
         if (isNavVisible) {
             if (lazyListState.isScrollInProgress) return@LaunchedEffect
@@ -79,17 +79,15 @@ fun MainScreen() {
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        // 视频播放层
         TikTokPlayer(videos = videos)
 
-        // 交互层：顶部 1/3 区域控制导航显隐
         Column(modifier = Modifier.fillMaxSize()) {
             Box(modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
-                    indication = null // 去掉点击时的灰色水波纹，保持纯净
+                    indication = null 
                 ) { 
                     isNavVisible = !isNavVisible 
                     if (isNavVisible) hideTimerResetTrigger++
@@ -98,7 +96,6 @@ fun MainScreen() {
             Box(modifier = Modifier.fillMaxWidth().weight(2f)) 
         }
 
-        // 导航栏
         AnimatedVisibility(
             visible = isNavVisible,
             enter = fadeIn() + slideInVertically(),
@@ -108,10 +105,10 @@ fun MainScreen() {
                 state = lazyListState,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.6f)) // 稍微加深底色
+                    .background(Color.Black.copy(alpha = 0.6f))
                     .padding(top = 50.dp, bottom = 20.dp),
                 contentPadding = PaddingValues(horizontal = 20.dp),
-                horizontalArrangement = Arrangement.spacedBy(15.dp) // 缩小间距，靠点击热区撑开
+                horizontalArrangement = Arrangement.spacedBy(15.dp)
             ) {
                 item {
                     CategoryTab("全部", currentPlaylistName == null) { 
@@ -132,8 +129,6 @@ fun MainScreen() {
 
 @Composable
 fun CategoryTab(title: String, isSelected: Boolean, onClick: () -> Unit) {
-    // 2. ✅ 优化触摸灵敏度：增加 Padding 扩大点击热区
-    // 3. ✅ 加大导航文字：18.sp 和 16.sp
     Text(
         text = title,
         color = if (isSelected) Color.White else Color.White.copy(alpha = 0.35f),
@@ -142,9 +137,9 @@ fun CategoryTab(title: String, isSelected: Boolean, onClick: () -> Unit) {
         modifier = Modifier
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
-                indication = null // 导航项点击也去掉阴影，更丝滑
+                indication = null 
             ) { onClick() }
-            .padding(horizontal = 12.dp, vertical = 8.dp) // 这里就是“灵敏度”的关键，增加了手指触发的范围
+            .padding(horizontal = 12.dp, vertical = 8.dp) 
     )
 }
 
@@ -207,7 +202,6 @@ fun VideoPage(uri: Uri, play: Boolean) {
     }
 }
 
-// 获取分类文件夹
 fun getAvailableVideoFolders(context: android.content.Context): List<String> {
     val folders = mutableSetOf<String>()
     val projection = arrayOf(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
@@ -218,7 +212,6 @@ fun getAvailableVideoFolders(context: android.content.Context): List<String> {
     return folders.toList().sorted()
 }
 
-// 获取视频列表
 fun getVideos(context: android.content.Context, albumName: String? = null): List<Uri> {
     val videoList = mutableListOf<Uri>()
     val selection = if (albumName != null) "${MediaStore.Video.Media.BUCKET_DISPLAY_NAME} = ?" else null
