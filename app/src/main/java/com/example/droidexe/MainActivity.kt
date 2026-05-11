@@ -34,7 +34,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
-import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -46,33 +45,17 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 
-// 安全获取 Activity，防止闪退
-fun Context.findActivity(): Activity? {
-    var context = this
-    while (context is ContextWrapper) {
-        if (context is Activity) return context
-        context = context.baseContext
-    }
-    return null
-}
-
-@UnstableApi 
+@UnstableApi
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // 沉浸式与常亮
+        // 基础系统级配置
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
         
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-            val lp = window.attributes
-            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-            window.attributes = lp
-        }
-
         setContent {
-            Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
+            Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
                 MainScreen()
             }
         }
@@ -86,8 +69,12 @@ fun MainScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     
-    // 1. 先声明数据，保证 Pager 创建时数据的一致性
-    var videoFiles by remember { mutableStateOf(loadInternalVideos(context)) }
+    // 异步加载视频列表，防止主线程阻塞
+    var videoFiles by remember { mutableStateOf<List<File>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        videoFiles = loadInternalVideos(context)
+    }
+
     var isImporting by remember { mutableStateOf(false) }
     var pausedByUser by remember { mutableStateOf(false) }
 
@@ -102,46 +89,46 @@ fun MainScreen() {
         }
     }
 
-    // 2. 稳定的 PagerState，不再随旋转销毁
-    val pagerState = rememberPagerState(pageCount = { videoFiles.size })
-
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        if (videoFiles.isEmpty()) {
-            Text("请点击右下角导入视频", color = Color.Gray, modifier = Modifier.align(Alignment.Center))
-        } else {
-            VerticalPager(
-                state = pagerState,
-                modifier = Modifier.fillMaxSize(),
-                beyondBoundsPageCount = 0,
-                pageSpacing = 0.dp,
-                key = { index -> if (index < videoFiles.size) videoFiles[index].name else index }
-            ) { page ->
-                val isVisible = pagerState.currentPage == page && !pagerState.isScrollInProgress
-                if (page < videoFiles.size) {
-                    VideoPage(
-                        file = videoFiles[page], 
-                        isActive = isVisible,
-                        onPauseStateChange = { pausedByUser = it }
-                    )
-                }
-            }
+    if (videoFiles.isNotEmpty()) {
+        val pagerState = rememberPagerState(pageCount = { videoFiles.size })
+        
+        VerticalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize(),
+            beyondBoundsPageCount = 0
+        ) { page ->
+            // 只有当这一页完全静止显示时才认为 isActive
+            val isActive = pagerState.currentPage == page && !pagerState.isScrollInProgress
+            VideoPage(
+                file = videoFiles[page],
+                isActive = isActive,
+                onPauseStateChange = { pausedByUser = it }
+            )
         }
-
-        // 浮动按钮：仅在必要时出现，且极高透明度
-        if ((videoFiles.isEmpty() || pausedByUser) && !isImporting) {
-            FloatingActionButton(
-                onClick = { launcher.launch("video/*") },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 100.dp, end = 32.dp),
-                containerColor = Color.White.copy(alpha = 0.1f),
-                contentColor = Color.White.copy(alpha = 0.4f)
-            ) {
-                Icon(Icons.Default.Add, null)
-            }
+    } else {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("请导入视频", color = Color.DarkGray)
         }
+    }
 
-        if (isImporting) {
-            CircularProgressIndicator(modifier = Modifier.align(Alignment.Center), color = Color.White.copy(alpha = 0.3f))
+    // 悬浮按钮 - 极淡处理
+    if ((videoFiles.isEmpty() || pausedByUser) && !isImporting) {
+        SmallFloatingActionButton(
+            onClick = { launcher.launch("video/*") },
+            modifier = Modifier.align(Alignment.BottomEnd).padding(32.dp),
+            containerColor = Color.White.copy(alpha = 0.1f),
+            contentColor = Color.White.copy(alpha = 0.3f)
+        ) {
+            Icon(Icons.Default.Add, null)
         }
+    }
+
+    if (isImporting) {
+        LinearProgressIndicator(
+            modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter),
+            color = Color.White.copy(alpha = 0.5f),
+            trackColor = Color.Transparent
+        )
     }
 }
 
@@ -149,65 +136,59 @@ fun MainScreen() {
 @Composable
 fun VideoPage(file: File, isActive: Boolean, onPauseStateChange: (Boolean) -> Unit) {
     val context = LocalContext.current
-    val activity = remember { context.findActivity() }
     val lifecycleOwner = LocalLifecycleOwner.current
     
+    // 状态管理
     var isPaused by remember { mutableStateOf(false) }
     var isResumed by remember { mutableStateOf(true) }
     var progress by remember { mutableFloatStateOf(0f) }
     var isDragging by remember { mutableStateOf(false) }
-    var vWidth by remember { mutableIntStateOf(0) }
-    var vHeight by remember { mutableIntStateOf(0) }
 
-    // 播放器创建：严格绑定 file，改变即销毁旧的
+    // 1. 创建播放器 (不立即准备)
     val exoPlayer = remember(file) {
         ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
-            prepare()
             repeatMode = Player.REPEAT_MODE_ONE
-            addListener(object : Player.Listener {
-                override fun onVideoSizeChanged(videoSize: VideoSize) {
-                    vWidth = videoSize.width
-                    vHeight = videoSize.height
-                }
-            })
         }
     }
 
-    // 必须：彻底释放资源
+    // 2. 严格的释放逻辑
     DisposableEffect(file) {
         onDispose { exoPlayer.release() }
     }
 
-    // 旋转逻辑：仅在页面激活且尺寸明确时触发
-    LaunchedEffect(isActive, vWidth, vHeight) {
-        if (isActive && vWidth > 0 && vHeight > 0) {
-            val target = if (vWidth > vHeight) ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE 
-                         else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            if (activity?.requestedOrientation != target) {
-                activity?.requestedOrientation = target
-            }
+    // 3. 屏幕旋转逻辑 - 直接获取 Activity
+    LaunchedEffect(isActive) {
+        if (isActive) {
+            val activity = (context as? Activity) ?: (context as? ContextWrapper)?.baseContext as? Activity
+            exoPlayer.addListener(object : Player.Listener {
+                override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                    val target = if (videoSize.width > videoSize.height) 
+                        ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                    activity?.requestedOrientation = target
+                }
+            })
+            // 开始加载
+            exoPlayer.setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
+            exoPlayer.prepare()
         }
     }
 
-    // 生命周期监听
+    // 4. 生命周期同步
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) isResumed = true
-            if (event == Lifecycle.Event.ON_PAUSE) isResumed = false
+            isResumed = (event == Lifecycle.Event.ON_RESUME)
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // 播放状态逻辑
+    // 5. 播放控制与进度轮询
     LaunchedEffect(isActive, isPaused, isResumed) {
         if (isActive && !isPaused && isResumed) {
             exoPlayer.play()
             while (true) {
-                if (!isDragging) {
-                    val duration = exoPlayer.duration.coerceAtLeast(1L)
-                    progress = exoPlayer.currentPosition.toFloat() / duration.toFloat()
+                if (!isDragging && exoPlayer.duration > 0) {
+                    progress = exoPlayer.currentPosition.toFloat() / exoPlayer.duration.toFloat()
                 }
                 delay(500)
             }
@@ -216,56 +197,61 @@ fun VideoPage(file: File, isActive: Boolean, onPauseStateChange: (Boolean) -> Un
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
-            factory = { 
-                PlayerView(it).apply { 
+            factory = { ctx ->
+                PlayerView(ctx).apply {
                     player = exoPlayer
                     useController = false
                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                } 
+                }
             },
             modifier = Modifier.fillMaxSize().clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
-            ) { 
+            ) {
                 isPaused = !isPaused
                 onPauseStateChange(isPaused)
             }
         )
 
+        // 暂停时的中间图标
         if (isPaused) {
-            Icon(Icons.Default.PlayArrow, null, Modifier.size(80.dp).align(Alignment.Center), tint = Color.White.copy(alpha = 0.1f))
-        }
-
-        // ✅ 极致淡化进度条：透明度降至 0.03，宽度加大方便操作
-        Box(
-            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(40.dp)
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { },
-            contentAlignment = Alignment.Center
-        ) {
-            Slider(
-                value = progress,
-                onValueChange = { isDragging = true; progress = it },
-                onValueChangeFinished = {
-                    isDragging = false
-                    exoPlayer.seekTo((progress * exoPlayer.duration).toLong())
-                },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 40.dp),
-                colors = SliderDefaults.colors(
-                    thumbColor = Color.White.copy(alpha = 0.05f),
-                    activeTrackColor = Color.White.copy(alpha = 0.03f),
-                    inactiveTrackColor = Color.White.copy(alpha = 0.01f)
-                )
+            Icon(
+                Icons.Default.PlayArrow, null, 
+                modifier = Modifier.size(60.dp).align(Alignment.Center),
+                tint = Color.White.copy(alpha = 0.15f)
             )
         }
+
+        // ✅ 极致淡化进度条：透明度 0.03f，位置极低，不抢戏
+        Slider(
+            value = progress,
+            onValueChange = { isDragging = true; progress = it },
+            onValueChangeFinished = {
+                isDragging = false
+                exoPlayer.seekTo((progress * exoPlayer.duration).toLong())
+            },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(horizontal = 40.dp, vertical = 8.dp),
+            colors = SliderDefaults.colors(
+                thumbColor = Color.White.copy(alpha = 0.05f),      // 滑块：几乎隐形
+                activeTrackColor = Color.White.copy(alpha = 0.03f),// 已播放：极淡白色
+                inactiveTrackColor = Color.White.copy(alpha = 0.01f)// 未播放：接近透明
+            )
+        )
     }
 }
 
+// 数据持久化方法保持稳定
 fun loadInternalVideos(context: Context): List<File> {
     val folder = File(context.filesDir, "videos")
     if (!folder.exists()) folder.mkdirs()
-    return folder.listFiles()?.filter { it.extension.lowercase() in listOf("mp4", "mkv", "mov", "webm") }?.sortedByDescending { it.lastModified() } ?: emptyList()
+    return folder.listFiles()?.filter { 
+        it.extension.lowercase() in listOf("mp4", "mkv", "mov", "webm") 
+    }?.sortedByDescending { it.lastModified() } ?: emptyList()
 }
 
 suspend fun importVideos(context: Context, uris: List<Uri>) = withContext(Dispatchers.IO) {
@@ -274,10 +260,8 @@ suspend fun importVideos(context: Context, uris: List<Uri>) = withContext(Dispat
     uris.forEach { uri ->
         val destFile = File(folder, "tok_${System.currentTimeMillis()}.mp4")
         try {
-            context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                FileOutputStream(destFile).use { outputStream ->
-                    inputStream.copyTo(outputStream)
-                }
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(destFile).use { output -> input.copyTo(output) }
             }
         } catch (e: Exception) { e.printStackTrace() }
     }
