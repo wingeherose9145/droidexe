@@ -45,6 +45,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 
+// 安全获取 Activity
 fun Context.findActivity(): Activity? {
     var ctx = this
     while (ctx is ContextWrapper) {
@@ -92,10 +93,6 @@ fun MainScreen() {
     var isImporting by remember { mutableStateOf(false) }
     var pausedByUser by remember { mutableStateOf(false) }
 
-    val pagerState = rememberPagerState(
-        pageCount = { videoFiles.size }
-    )
-
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetMultipleContents()
     ) { uris ->
@@ -115,6 +112,7 @@ fun MainScreen() {
             .background(Color.Black)
     ) {
 
+        // 🚨 空数据保护（关键）
         if (videoFiles.isEmpty()) {
 
             Box(
@@ -122,7 +120,7 @@ fun MainScreen() {
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    "点击右下角 + 导入视频",
+                    "暂无视频\n点击右下角 + 导入视频",
                     color = Color.Gray,
                     textAlign = TextAlign.Center
                 )
@@ -130,29 +128,32 @@ fun MainScreen() {
 
         } else {
 
+            val pagerState = rememberPagerState(
+                pageCount = { videoFiles.size.coerceAtLeast(1) }
+            )
+
             VerticalPager(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),
                 beyondBoundsPageCount = 1
             ) { page ->
 
-                val isActive =
-                    pagerState.currentPage == page &&
-                    !pagerState.isScrollInProgress
-
                 if (page < videoFiles.size) {
+
+                    val isActive =
+                        pagerState.currentPage == page &&
+                                !pagerState.isScrollInProgress
 
                     VideoPage(
                         file = videoFiles[page],
                         play = isActive,
-                        onPauseStateChange = {
-                            pausedByUser = it
-                        }
+                        onPauseStateChange = { pausedByUser = it }
                     )
                 }
             }
         }
 
+        // 导入按钮
         if ((videoFiles.isEmpty() || pausedByUser) && !isImporting) {
 
             FloatingActionButton(
@@ -184,6 +185,9 @@ fun VideoPage(
     onPauseStateChange: (Boolean) -> Unit
 ) {
 
+    // 🚨 文件保护（关键）
+    if (!file.exists()) return
+
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -194,14 +198,20 @@ fun VideoPage(
 
     val exoPlayer = remember(file) {
         ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
-            prepare()
+
+            runCatching {
+                setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
+                prepare()
+            }
+
             repeatMode = Player.REPEAT_MODE_ONE
         }
     }
 
     DisposableEffect(Unit) {
-        onDispose { exoPlayer.release() }
+        onDispose {
+            exoPlayer.release()
+        }
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -213,16 +223,25 @@ fun VideoPage(
     }
 
     LaunchedEffect(play, paused, isForeground) {
+
         if (play && !paused && isForeground) {
+
             exoPlayer.play()
 
-            while (true) {
+            while (isActive && exoPlayer.isPlaying) {
+
                 if (!isDragging) {
-                    val duration = exoPlayer.duration.coerceAtLeast(1L)
-                    progress = exoPlayer.currentPosition.toFloat() / duration
+
+                    val duration =
+                        exoPlayer.duration.coerceAtLeast(1L)
+
+                    progress =
+                        exoPlayer.currentPosition.toFloat() / duration
                 }
+
                 delay(120)
             }
+
         } else {
             exoPlayer.pause()
         }
@@ -235,9 +254,8 @@ fun VideoPage(
                 PlayerView(it).apply {
                     player = exoPlayer
                     useController = false
-
-                    // 🔥 TikTok核心：自动裁切铺满
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    resizeMode =
+                        AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                 }
             },
             modifier = Modifier
@@ -262,16 +280,12 @@ fun VideoPage(
             )
         }
 
-        // 🔥 极淡进度条（高精度）
+        // 进度条（极淡 + 精确）
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .height(50.dp)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null
-                ) {},
+                .height(50.dp),
             contentAlignment = Alignment.Center
         ) {
 
@@ -283,7 +297,9 @@ fun VideoPage(
                 },
                 onValueChangeFinished = {
                     isDragging = false
-                    exoPlayer.seekTo((progress * exoPlayer.duration).toLong())
+                    exoPlayer.seekTo(
+                        (progress * exoPlayer.duration).toLong()
+                    )
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -297,6 +313,8 @@ fun VideoPage(
         }
     }
 }
+
+// -------------------- 数据层 --------------------
 
 fun loadInternalVideos(context: Context): List<File> {
     val folder = File(context.filesDir, "videos")
@@ -316,7 +334,10 @@ suspend fun importVideos(context: Context, uris: List<Uri>) =
 
         uris.forEach { uri ->
 
-            val dest = File(folder, "tok_${System.currentTimeMillis()}.mp4")
+            val dest = File(
+                folder,
+                "tok_${System.currentTimeMillis()}.mp4"
+            )
 
             context.contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(dest).use { output ->
