@@ -2,6 +2,7 @@ package com.example.tokplayer
 
 import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Bundle
@@ -47,12 +48,22 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 
+// 安全获取 Activity 的助手函数，防止 Context 包装导致的闪退
+fun Context.findActivity(): Activity? {
+    var context = this
+    while (context is ContextWrapper) {
+        if (context is Activity) return context
+        context = context.baseContext
+    }
+    return null
+}
+
 @UnstableApi 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // 开启常亮和全屏适配
+        // 设置常亮和全屏
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
         
@@ -62,7 +73,11 @@ class MainActivity : ComponentActivity() {
             window.attributes = lp
         }
 
-        setContent { MainScreen() }
+        setContent {
+            Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
+                MainScreen()
+            }
+        }
     }
 }
 
@@ -72,7 +87,7 @@ class MainActivity : ComponentActivity() {
 fun MainScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val configuration = LocalConfiguration.current // 监听屏幕配置
+    val configuration = LocalConfiguration.current
     
     var videoFiles by remember { mutableStateOf(loadInternalVideos(context)) }
     var isImporting by remember { mutableStateOf(false) }
@@ -92,12 +107,15 @@ fun MainScreen() {
 
     val pagerState = rememberPagerState(pageCount = { videoFiles.size })
 
-    // ✅ 解决画面重叠的核心逻辑：
-    // 每当屏幕旋转方向发生变化，强制 Pager 重新对齐当前页
+    // ✅ 修复对齐闪退：增加安全检查
     LaunchedEffect(configuration.orientation) {
-        if (videoFiles.isNotEmpty()) {
-            delay(150) // 等待布局刷新完毕
-            pagerState.scrollToPage(pagerState.currentPage)
+        if (videoFiles.isNotEmpty() && pagerState.pageCount > 0) {
+            try {
+                delay(200) // 给系统足够的布局转换时间
+                pagerState.scrollToPage(pagerState.currentPage)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
 
@@ -107,7 +125,7 @@ fun MainScreen() {
                 modifier = Modifier.fillMaxSize().clickable { pausedByUser = !pausedByUser },
                 contentAlignment = Alignment.Center
             ) {
-                Text("请点击右下角按钮导入视频", color = Color.DarkGray, textAlign = TextAlign.Center)
+                Text("暂无视频，请点击右下角导入", color = Color.Gray, textAlign = TextAlign.Center)
             }
         } else {
             VerticalPager(
@@ -116,31 +134,32 @@ fun MainScreen() {
                 beyondBoundsPageCount = 0,
                 pageSpacing = 0.dp
             ) { page ->
-                // 滑动中禁止旋转，停止滑动后才允许 VideoPage 接管方向
-                val canPlay = pagerState.currentPage == page && !pagerState.isScrollInProgress
-                
-                VideoPage(
-                    file = videoFiles[page], 
-                    play = canPlay,
-                    onPauseStateChange = { pausedByUser = it }
-                )
+                // 仅在当前页且停止滑动时激活视频逻辑
+                val isCurrent = pagerState.currentPage == page && !pagerState.isScrollInProgress
+                if (page < videoFiles.size) {
+                    VideoPage(
+                        file = videoFiles[page], 
+                        play = isCurrent,
+                        onPauseStateChange = { pausedByUser = it }
+                    )
+                }
             }
         }
 
-        // 按钮显示逻辑
+        // 按钮淡化处理
         if ((videoFiles.isEmpty() || pausedByUser) && !isImporting) {
             FloatingActionButton(
                 onClick = { launcher.launch("video/*") },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 100.dp, end = 32.dp),
-                containerColor = Color.White.copy(alpha = 0.3f),
-                contentColor = Color.Black
+                modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 100.dp, end = 30.dp),
+                containerColor = Color.White.copy(alpha = 0.2f),
+                contentColor = Color.White
             ) {
                 Icon(Icons.Default.Add, null)
             }
         }
 
         if (isImporting) {
-            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.6f)), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = Color.White.copy(alpha = 0.5f))
             }
         }
@@ -151,7 +170,7 @@ fun MainScreen() {
 @Composable
 fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) {
     val context = LocalContext.current
-    val activity = context as? Activity
+    val activity = remember { context.findActivity() } // 安全获取 Activity
     val lifecycleOwner = LocalLifecycleOwner.current 
     
     var paused by remember { mutableStateOf(false) }
@@ -176,7 +195,7 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
         }
     }
 
-    // 方向自适应逻辑
+    // 方向切换
     LaunchedEffect(play, videoWidth, videoHeight) {
         if (play && videoWidth > 0 && videoHeight > 0) {
             val target = if (videoWidth > videoHeight) ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE 
@@ -189,8 +208,7 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE) isAppInForeground = false 
-            else if (event == Lifecycle.Event.ON_RESUME) isAppInForeground = true 
+            isAppInForeground = (event == Lifecycle.Event.ON_RESUME)
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -201,8 +219,8 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
             exoPlayer.play()
             while (true) {
                 if (!isDragging) {
-                    val dur = exoPlayer.duration.coerceAtLeast(1L)
-                    progress = exoPlayer.currentPosition.toFloat() / dur.toFloat()
+                    val duration = exoPlayer.duration.coerceAtLeast(1L)
+                    progress = exoPlayer.currentPosition.toFloat() / duration.toFloat()
                 }
                 delay(500)
             }
@@ -232,12 +250,12 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
         )
 
         if (paused) {
-            Icon(Icons.Default.PlayArrow, null, Modifier.size(64.dp).align(Alignment.Center), tint = Color.White.copy(alpha = 0.2f))
+            Icon(Icons.Default.PlayArrow, null, Modifier.size(80.dp).align(Alignment.Center), tint = Color.White.copy(alpha = 0.1f))
         }
 
-        // ✅ 优化后的进度条：极其低调、高精度
+        // ✅ 极致淡化进度条：高度更小，颜色更浅，减少视觉干扰
         Box(
-            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(60.dp)
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(50.dp)
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }, 
             contentAlignment = Alignment.Center
         ) {
@@ -250,9 +268,9 @@ fun VideoPage(file: File, play: Boolean, onPauseStateChange: (Boolean) -> Unit) 
                 },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 40.dp),
                 colors = SliderDefaults.colors(
-                    thumbColor = Color.White.copy(alpha = 0.1f),      // 几乎隐形的滑块
-                    activeTrackColor = Color.White.copy(alpha = 0.08f),// 极其暗淡的已播轨道
-                    inactiveTrackColor = Color.White.copy(alpha = 0.03f)// 几乎看不见的未播轨道
+                    thumbColor = Color.White.copy(alpha = 0.05f),
+                    activeTrackColor = Color.White.copy(alpha = 0.05f),
+                    inactiveTrackColor = Color.White.copy(alpha = 0.02f)
                 )
             )
         }
