@@ -249,16 +249,13 @@ fun VideoPage(
 
     Box(modifier = Modifier.fillMaxSize()) {
 
-        AndroidView(
-            factory = {
-                PlayerView(it).apply {
+  AndroidView(
+            factory = { context ->
+                PlayerView(context).apply {
                     player = exoPlayer
                     useController = false
-                                    // 智能适配：横屏视频优先充满宽度，竖屏优先充满高度
-                resizeMode = if (videoWidth > videoHeight) {
-                    AspectRatioFrameLayout.RESIZE_MODE_FIT   // 横屏 → 上下黑边（推荐）
-                } else {
-                    AspectRatioFrameLayout.RESIZE_MODE_FIT   // 竖屏
+                    // 默认使用 FIT 模式（不拉伸、不裁切）
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                 }
             },
             modifier = Modifier
@@ -267,8 +264,12 @@ fun VideoPage(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
                 ) {
-                    paused = !paused
-                    onPauseStateChange(paused)
+                    // 点击切换播放/暂停
+                    if (exoPlayer.isPlaying) {
+                        exoPlayer.pause()
+                    } else {
+                        exoPlayer.play()
+                    }
                 }
         )
 
