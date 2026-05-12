@@ -280,19 +280,19 @@ fun VideoPage(
             )
         }
 
-               // 改进版可拖动进度条
+                  // === 改进版可拖动进度条（安全版）===
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(bottom = 30.dp),
+                .padding(bottom = 40.dp),
             contentAlignment = Alignment.Center
         ) {
             Slider(
-                value = progress,
-                onValueChange = {
+                value = if (exoPlayer.duration > 0) progress else 0f,
+                onValueChange = { newValue ->
                     isDragging = true
-                    progress = it
+                    progress = newValue
                 },
                 onValueChangeFinished = {
                     isDragging = false
@@ -300,13 +300,14 @@ fun VideoPage(
                         exoPlayer.seekTo((progress * exoPlayer.duration).toLong())
                     }
                 },
+                valueRange = 0f..1f,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 32.dp),
                 colors = SliderDefaults.colors(
                     thumbColor = Color.White,
-                    activeTrackColor = Color.White.copy(alpha = 0.7f),
-                    inactiveTrackColor = Color.White.copy(alpha = 0.2f)
+                    activeTrackColor = Color.White.copy(alpha = 0.8f),
+                    inactiveTrackColor = Color.White.copy(alpha = 0.3f)
                 )
             )
         }
