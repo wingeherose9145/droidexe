@@ -280,23 +280,23 @@ fun VideoPage(
             )
         }
 
-                  // === 改进版可拖动进度条（安全版）===
+               // === 改进版可拖动进度条（清晰 + 安全）===
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(bottom = 40.dp),
+                .padding(bottom = 48.dp),
             contentAlignment = Alignment.Center
         ) {
             Slider(
-                value = if (exoPlayer.duration > 0) progress else 0f,
+                value = progress,
                 onValueChange = { newValue ->
                     isDragging = true
                     progress = newValue
                 },
                 onValueChangeFinished = {
                     isDragging = false
-                    if (exoPlayer.duration > 0) {
+                    if (exoPlayer.duration > 0L) {
                         exoPlayer.seekTo((progress * exoPlayer.duration).toLong())
                     }
                 },
@@ -306,11 +306,13 @@ fun VideoPage(
                     .padding(horizontal = 32.dp),
                 colors = SliderDefaults.colors(
                     thumbColor = Color.White,
-                    activeTrackColor = Color.White.copy(alpha = 0.8f),
+                    activeTrackColor = Color.White.copy(alpha = 0.9f),
                     inactiveTrackColor = Color.White.copy(alpha = 0.3f)
                 )
             )
         }
+    }
+}
 
 // -------------------- 数据层 --------------------
 
