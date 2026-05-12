@@ -254,8 +254,12 @@ fun VideoPage(
                 PlayerView(it).apply {
                     player = exoPlayer
                     useController = false
-                    resizeMode =
-                        AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                    // 智能适配：横屏视频优先充满宽度，竖屏优先充满高度
+                resizeMode = if (videoWidth > videoHeight) {
+                    AspectRatioFrameLayout.RESIZE_MODE_FIT   // 横屏 → 上下黑边（推荐）
+                } else {
+                    AspectRatioFrameLayout.RESIZE_MODE_FIT   // 竖屏
+                }
                 }
             },
             modifier = Modifier
