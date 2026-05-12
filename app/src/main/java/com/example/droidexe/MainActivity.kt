@@ -255,7 +255,7 @@ fun VideoPage(
                     player = exoPlayer
                     useController = false
                     resizeMode =
-                        AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        AspectRatioFrameLayout.RESIZE_MODE_FIT
                 }
             },
             modifier = Modifier
