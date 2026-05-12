@@ -260,7 +260,6 @@ fun VideoPage(
                 } else {
                     AspectRatioFrameLayout.RESIZE_MODE_FIT   // 竖屏
                 }
-                }
             },
             modifier = Modifier
                 .fillMaxSize()
